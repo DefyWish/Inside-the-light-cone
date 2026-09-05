@@ -2,10 +2,14 @@
 set -euo pipefail
 
 project_dir="${0:A:h:h}"
-python_bin="$project_dir/envs/jialuo-tree/bin/python"
+if [[ -x "$project_dir/.venv/bin/python" ]]; then
+  python_bin="$project_dir/.venv/bin/python"
+else
+  python_bin="$project_dir/envs/jialuo-tree/bin/python"
+fi
 
 if [[ ! -x "$python_bin" ]]; then
-  print -u2 "缺少项目环境：先按 README 创建 envs/jialuo-tree。"
+  print -u2 "缺少项目环境：先执行 ./scripts/setup_demo.sh"
   exit 1
 fi
 
