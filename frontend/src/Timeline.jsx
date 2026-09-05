@@ -75,7 +75,8 @@ export default function Timeline({ events, cursorYear, onChange, selectedId, onS
           step="1"
           value={Math.min(Math.max(cursorYear, min), max)}
           disabled={years.length === 0}
-          onChange={(event) => onChange(Number(event.target.value))}
+          onInput={(event) => onChange(Number(event.currentTarget.value))}
+          onChange={(event) => onChange(Number(event.currentTarget.value))}
           aria-label="拖动年代"
         />
       </div>

@@ -14,7 +14,12 @@ class EvidenceToolsTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.catalog = ROOT / "artifacts/catalog.sqlite"
-        cls.tools = EvidenceTools(cls.catalog, ROOT / "artifacts/numeric")
+        cls.tools = EvidenceTools(
+            cls.catalog,
+            ROOT / "artifacts/numeric",
+            aliases_path=ROOT / "data/aliases.json",
+            curation_dir=ROOT / "data/curation",
+        )
         with sqlite3.connect(cls.catalog) as connection:
             cls.ancient_individual = connection.execute(
                 """SELECT i.display_name
@@ -67,6 +72,26 @@ class EvidenceToolsTest(unittest.TestCase):
         result = self.tools.execute("search_literature", {"query": self.publication})
         self.assertEqual(result.status, "ok")
         self.assertTrue(result.items)
+
+    def test_chinese_curated_source_kind_is_normalized(self) -> None:
+        result = self.tools.execute(
+            "search_curated_sources", {"query": "苏轼", "source_kind": "史传"}
+        )
+        self.assertEqual(result.status, "ok")
+        self.assertTrue(result.items)
+        self.assertTrue(all(item["source_kind"] == "primary_chronicle" for item in result.items))
+
+    def test_hakka_theme_preloads_multiscale_local_evidence(self) -> None:
+        result = self.tools.execute(
+            "search_curated_sources", {"query": "客家人", "limit": 100}
+        )
+        self.assertEqual(result.status, "ok")
+        self.assertGreaterEqual(len(result.items), 15)
+        source_kinds = {item["source_kind"] for item in result.items}
+        self.assertIn("ancient_genome_dataset", source_kinds)
+        self.assertIn("peer_reviewed_article", source_kinds)
+        self.assertIn("museum_catalog", source_kinds)
+        self.assertTrue(any(item.get("genetic_id") == "Qihe3.AG.SG" for item in result.items))
 
     def test_genetic_relation_status_is_typed(self) -> None:
         result = self.tools.execute(

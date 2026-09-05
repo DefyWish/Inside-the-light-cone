@@ -4,7 +4,7 @@ import asyncio
 import json
 import sqlite3
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -87,6 +87,136 @@ class ClaimStore:
                     PRIMARY KEY (investigation_id, relation_id)
                 )"""
             )
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS investigations (
+                    investigation_id TEXT PRIMARY KEY,
+                    question TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    state_json TEXT NOT NULL,
+                    done INTEGER NOT NULL DEFAULT 0
+                )"""
+            )
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS investigation_events (
+                    investigation_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    event_type TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    data_json TEXT NOT NULL,
+                    PRIMARY KEY (investigation_id, sequence)
+                )"""
+            )
+            connection.execute(
+                """CREATE INDEX IF NOT EXISTS investigation_events_by_session
+                   ON investigation_events (investigation_id, sequence)"""
+            )
+
+    @staticmethod
+    def _upsert_session(connection: sqlite3.Connection, session: InvestigationSession) -> None:
+        connection.execute(
+            """INSERT OR REPLACE INTO investigations (
+                investigation_id, question, provider, status,
+                created_at, state_json, done
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                session.id,
+                session.question,
+                session.provider,
+                session.status,
+                session.created_at,
+                json.dumps(asdict(session.state), ensure_ascii=False, default=str),
+                int(session.done),
+            ),
+        )
+
+    def save_session(self, session: InvestigationSession) -> None:
+        with sqlite3.connect(self.path) as connection:
+            self._upsert_session(connection, session)
+
+    def save_event(self, session: InvestigationSession, event: dict[str, Any]) -> None:
+        with sqlite3.connect(self.path) as connection:
+            connection.execute(
+                """INSERT OR REPLACE INTO investigation_events (
+                    investigation_id, sequence, event_type, timestamp, data_json
+                ) VALUES (?, ?, ?, ?, ?)""",
+                (
+                    session.id,
+                    event["sequence"],
+                    event["type"],
+                    event["timestamp"],
+                    json.dumps(event["data"], ensure_ascii=False, default=str),
+                ),
+            )
+            self._upsert_session(connection, session)
+
+    def load_sessions(self) -> list[InvestigationSession]:
+        with sqlite3.connect(self.path) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                "SELECT * FROM investigations ORDER BY created_at"
+            ).fetchall()
+            sessions: list[InvestigationSession] = []
+            for row in rows:
+                state = InvestigationState(**json.loads(row["state_json"]))
+                event_rows = connection.execute(
+                    """SELECT sequence, event_type, timestamp, data_json
+                       FROM investigation_events
+                       WHERE investigation_id = ? ORDER BY sequence""",
+                    (row["investigation_id"],),
+                ).fetchall()
+                events = [
+                    {
+                        "sequence": event_row["sequence"],
+                        "type": event_row["event_type"],
+                        "timestamp": event_row["timestamp"],
+                        "data": json.loads(event_row["data_json"]),
+                    }
+                    for event_row in event_rows
+                ]
+                session = InvestigationSession(
+                    id=row["investigation_id"],
+                    question=row["question"],
+                    provider=row["provider"],
+                    state=state,
+                    created_at=row["created_at"],
+                    events=events,
+                    done=bool(row["done"]),
+                    store=self,
+                )
+                terminal = events[-1]["type"] if events else None
+                if not session.done and terminal in {
+                    "investigation.completed",
+                    "investigation.failed",
+                    "investigation.stopped",
+                }:
+                    session.done = True
+                    self._upsert_session(connection, session)
+                elif not session.done:
+                    interruption = {
+                        "sequence": len(events) + 1,
+                        "type": "investigation.stopped",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "data": {"message": "服务重启，调查记录已保存，可继续追问。"},
+                    }
+                    session.events.append(interruption)
+                    session.done = True
+                    connection.execute(
+                        """INSERT OR REPLACE INTO investigation_events (
+                            investigation_id, sequence, event_type, timestamp, data_json
+                        ) VALUES (?, ?, ?, ?, ?)""",
+                        (
+                            session.id,
+                            interruption["sequence"],
+                            interruption["type"],
+                            interruption["timestamp"],
+                            json.dumps(interruption["data"], ensure_ascii=False),
+                        ),
+                    )
+                    self._upsert_session(connection, session)
+                sessions.append(session)
+        return sessions
 
     def save_claim(self, investigation_id: str, claim: dict[str, Any]) -> None:
         with sqlite3.connect(self.path) as connection:
@@ -130,6 +260,7 @@ class InvestigationSession:
     done: bool = False
     condition: asyncio.Condition = field(default_factory=asyncio.Condition)
     redirects: asyncio.Queue[str] = field(default_factory=asyncio.Queue)
+    store: ClaimStore | None = field(default=None, repr=False, compare=False)
 
     @property
     def status(self) -> str:
@@ -154,16 +285,22 @@ class InvestigationSession:
                 "data": data,
             }
             self.events.append(event)
+            if self.store is not None:
+                self.store.save_event(self, event)
             self.condition.notify_all()
 
     async def finish(self) -> None:
         async with self.condition:
             self.done = True
+            if self.store is not None:
+                self.store.save_session(self)
             self.condition.notify_all()
 
     async def reopen(self) -> None:
         async with self.condition:
             self.done = False
+            if self.store is not None:
+                self.store.save_session(self)
             self.condition.notify_all()
 
     async def stream(self, after: int = 0) -> AsyncIterator[dict[str, Any]]:
@@ -198,13 +335,17 @@ class InvestigationManager:
         research_agent: ResearchAgent | None = None,
         maximum_steps: int = 28,
         claim_store: ClaimStore | None = None,
+        restore_sessions: bool = True,
     ) -> None:
         self.provider = provider
         self.evidence_tools = evidence_tools
         self.research_agent = research_agent
         self.maximum_steps = maximum_steps
         self.claim_store = claim_store
-        self.sessions: dict[str, InvestigationSession] = {}
+        restored = claim_store.load_sessions() if claim_store and restore_sessions else []
+        self.sessions: dict[str, InvestigationSession] = {
+            session.id: session for session in restored
+        }
         self.tasks: dict[str, asyncio.Task[None]] = {}
 
     async def create(self, question: str) -> InvestigationSession:
@@ -214,8 +355,11 @@ class InvestigationManager:
             question=question,
             provider=self.provider.name,
             state=InvestigationState(question=question),
+            store=self.claim_store,
         )
         self.sessions[investigation_id] = session
+        if self.claim_store is not None:
+            self.claim_store.save_session(session)
         self._start_task(session, resumed=False)
         return session
 
@@ -354,6 +498,15 @@ class InvestigationManager:
         ).hex
         item["evidence_id"] = evidence_id
         return evidence_id
+
+    @staticmethod
+    def _published_evidence_ids(session: InvestigationSession) -> set[str]:
+        return {
+            str(event["data"]["evidence"].get("evidence_id"))
+            for event in session.events
+            if event.get("type") == "evidence.added"
+            and event.get("data", {}).get("evidence", {}).get("evidence_id")
+        }
 
     async def _publish_agent_status(
         self,
@@ -518,6 +671,24 @@ class InvestigationManager:
         if action.event is None:
             return
         payload = action.event.model_dump()
+        destination = (payload.get("movement") or {}).get("to") or {}
+        destination_latitude = destination.get("latitude", destination.get("lat"))
+        destination_longitude = destination.get("longitude", destination.get("lon"))
+        if destination.get("name") and destination_latitude is not None and destination_longitude is not None:
+            payload["historical_place"] = destination["name"]
+            payload["latitude"] = destination_latitude
+            payload["longitude"] = destination_longitude
+        elif payload.get("latitude") is not None and payload.get("longitude") is not None:
+            place_text = f"{payload.get('historical_place') or ''}{payload.get('modern_place') or ''}"
+            if any(separator in place_text for separator in ("／", "/", "→", "、")):
+                session.state.observations.append(
+                    {
+                        "tool": "system",
+                        "status": "continue_required",
+                        "message": "带坐标的策展节点只能绑定一个地点；请拆分地点或用 movement 分别记录起终点。",
+                    }
+                )
+                return
         references = payload["source_ids"] + payload["claim_ids"] + payload["evidence_ids"]
         if not references and payload["epistemic_status"] != "gap":
             session.state.observations.append(
@@ -585,6 +756,7 @@ class InvestigationManager:
         )
         outcome = await self.research_agent.investigate(query)
         outcome_items = [item.model_dump() for item in outcome.items]
+        published_evidence_ids = self._published_evidence_ids(session)
         for item in outcome_items:
             self._ensure_evidence_id(item)
         state.observations.append(
@@ -609,6 +781,8 @@ class InvestigationManager:
             },
         )
         for item in outcome_items:
+            if item["evidence_id"] in published_evidence_ids:
+                continue
             await session.publish(
                 "evidence.added",
                 {
@@ -617,6 +791,7 @@ class InvestigationManager:
                     "evidence": item,
                 },
             )
+            published_evidence_ids.add(item["evidence_id"])
 
     async def _run(self, session: InvestigationSession, resumed: bool = False) -> None:
         state = session.state
@@ -659,12 +834,15 @@ class InvestigationManager:
                         pending_research=len(pending_research),
                     )
                     result = self.evidence_tools.execute(action.tool, action.arguments)
+                    published_evidence_ids = self._published_evidence_ids(session)
                     for item in result.items:
                         self._ensure_evidence_id(item)
                     result_payload = result.model_dump()
                     state.observations.append(result_payload)
                     await session.publish("tool.result", result_payload)
                     for item in result.items:
+                        if item["evidence_id"] in published_evidence_ids:
+                            continue
                         await session.publish(
                             "evidence.added",
                             {
@@ -673,6 +851,7 @@ class InvestigationManager:
                                 "evidence": item,
                             },
                         )
+                        published_evidence_ids.add(item["evidence_id"])
                     if self._is_gap(action.tool, result) and self.research_agent is not None:
                         state.observations.append(
                             {
@@ -763,6 +942,7 @@ class InvestigationManager:
                         {"message": "尚未形成任何 claim 或缺口声明，调查继续。"},
                     )
                     continue
+                await self._publish_agent_status(session, "completed", "策展调查已完成。")
                 await session.publish(
                     "investigation.completed",
                     {
@@ -773,16 +953,15 @@ class InvestigationManager:
                         "relations": len(state.relations),
                     },
                 )
-                await self._publish_agent_status(session, "completed", "策展调查已完成。")
                 await session.finish()
                 return
             if pending_research:
                 await asyncio.gather(*tuple(pending_research))
+            await self._publish_agent_status(session, "completed", "本轮调查已收束。")
             await session.publish(
                 "investigation.completed",
                 {"summary": "调查达到本轮步数上限。", "steps": state.provider_cursor},
             )
-            await self._publish_agent_status(session, "completed", "本轮调查已收束。")
         except asyncio.CancelledError:
             for task in pending_research:
                 task.cancel()

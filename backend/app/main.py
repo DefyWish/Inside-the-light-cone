@@ -19,6 +19,8 @@ from .investigation import (
     encode_sse,
 )
 from .providers import MockLLM, provider_from_environment
+from .query_filter import screen_question
+from .reports import Audience, build_investigation_report
 from .research_agent import (
     ResearchAgent,
     ResearchStagingStore,
@@ -82,7 +84,27 @@ research_agent = ResearchAgent(
 claim_store = ClaimStore(CLAIM_STORE_PATH)
 runtime_provider = provider_from_environment(FIXTURE_PATH, TOOL_DEFINITIONS)
 investigations = InvestigationManager(runtime_provider, evidence_tools, research_agent, claim_store=claim_store)
-replays = InvestigationManager(MockLLM(FIXTURE_PATH), evidence_tools, research_agent, claim_store=claim_store)
+replays = InvestigationManager(
+    MockLLM(FIXTURE_PATH),
+    evidence_tools,
+    research_agent,
+    claim_store=claim_store,
+    restore_sessions=False,
+)
+
+
+def enforce_query_scope(question: str, *, context: str | None = None) -> None:
+    decision = screen_question(question, context=context)
+    if decision.allowed:
+        return
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "action": decision.action,
+            "code": decision.code,
+            "message": decision.message,
+        },
+    )
 
 
 def manager_for(investigation_id: str) -> InvestigationManager | None:
@@ -122,6 +144,7 @@ def call_tool(tool_name: str, call: ToolCall) -> ToolResult:
 async def create_investigation(request: InvestigationRequest) -> InvestigationCreated:
     if investigations.is_stop_command(request.question):
         raise HTTPException(status_code=422, detail="当前没有可停止的调查")
+    enforce_query_scope(request.question)
     session = await investigations.create(request.question)
     return InvestigationCreated(
         investigation_id=session.id,
@@ -154,6 +177,12 @@ async def redirect_investigation(
     manager = manager_for(investigation_id)
     if manager is None:
         raise HTTPException(status_code=404, detail="investigation not found")
+    session = manager.get(investigation_id)
+    if not manager.is_stop_command(request.direction):
+        enforce_query_scope(
+            request.direction,
+            context=session.state.question if session is not None else None,
+        )
     accepted = await manager.redirect(investigation_id, request.direction)
     if accepted is None:
         raise HTTPException(status_code=404, detail="investigation not found")
@@ -192,3 +221,17 @@ async def stream_investigation(investigation_id: str, after: int = 0) -> Streami
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.get("/api/investigations/{investigation_id}/report")
+def investigation_report(
+    investigation_id: str,
+    audience: Audience = "professional",
+) -> dict[str, object]:
+    manager = manager_for(investigation_id)
+    session = manager.get(investigation_id) if manager else None
+    if session is None:
+        raise HTTPException(status_code=404, detail="investigation not found")
+    if not session.done:
+        raise HTTPException(status_code=409, detail="调查完成后生成报告")
+    return build_investigation_report(session, audience)

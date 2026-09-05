@@ -2,22 +2,95 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import App, { buildInvestigationLog, buildStoryline } from "./App.jsx";
+import App, { apiErrorMessage, buildInvestigationLog, buildStoryline, isVisualCurationCandidate, projectCurationEvents } from "./App.jsx";
+import CurationMap, { hasPoint } from "./CurationMap.jsx";
+import InvestigationReport from "./InvestigationReport.jsx";
+import Timeline from "./Timeline.jsx";
 import { formatHistoricalYear, historicalYearFor } from "./TreeCanvas.jsx";
 
-describe("M4 application shell", () => {
-  it("renders the investigation tree, evidence legend, log and input", () => {
+describe("history curation application shell", () => {
+  it("renders the map, life tree, history and investigation controls", () => {
     const html = renderToStaticMarkup(<App />);
 
-    expect(html).toContain("logo-slot");
-    expect(html).toContain("古基因组事实");
-    expect(html).toContain("证据空白");
-    expect(html).toContain("调查记录");
-    expect(html).toContain("开始新调查");
-    expect(html).toContain("沿本次继续");
-    expect(html).toContain("故事脉络");
-    expect(html).toContain("查看调查过程");
-    expect(html).not.toContain("启动本地保底重放");
+    expect(html).toContain("光锥之内");
+    expect(html).toContain("历史策展 Agent");
+    expect(html).toContain("检索历史");
+    expect(html).toContain("china-standard-outline.svg");
+    expect(html).toContain("生命树");
+    expect(html).toContain("新调查");
+    expect(html).toContain("调查过程");
+    expect(html).not.toContain("药物");
+    expect(html).not.toContain("BD");
+  });
+
+  it("keeps early evidence leaves after formal curation events arrive", () => {
+    const events = projectCurationEvents([
+      { sequence: 1, type: "evidence.added", data: { evidence: { evidence_id: "e1", title: "早期证据一", event_year_start: 100 } } },
+      { sequence: 2, type: "evidence.added", data: { evidence: { evidence_id: "e2", title: "早期证据二", event_year_start: 200 } } },
+      { sequence: 3, type: "curation.event_added", data: { event: { event_id: "final-1", title: "收束节点", event_year_start: 300 } } },
+    ]);
+
+    expect(events.map((event) => event.event_id)).toEqual(["e1", "e2", "final-1"]);
+  });
+
+  it("uses one destination per point and draws a timed migration route", () => {
+    const [event] = projectCurationEvents([
+      { sequence: 1, type: "evidence.added", data: { evidence: {
+        evidence_id: "move-1",
+        title: "由湖州贬往黄州",
+        event_year_start: 1079,
+        historical_place: "湖州／黄州",
+        modern_place: "浙江湖州／湖北黄冈",
+        latitude: 30.453,
+        longitude: 114.873,
+        movement: {
+          from: { name: "湖州", latitude: 30.894, longitude: 120.088 },
+          to: { name: "黄州", latitude: 30.453, longitude: 114.873 },
+        },
+      } } },
+    ]);
+    const html = renderToStaticMarkup(<CurationMap events={[event]} cursorYear={1079} selectedId="move-1" onSelect={() => {}} />);
+
+    expect(event.historical_place).toBe("黄州");
+    expect(event.latitude).toBe(30.453);
+    expect(html).toContain("route route-active");
+    expect(html.match(/route-anchor/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(html).toContain(">黄州</text>");
+    expect(html).not.toContain("湖州／黄州");
+  });
+
+  it("keeps deep-time background and negative evidence out of visual chronology", () => {
+    const background = {
+      claim: "华南古基因组提供深时区域背景而非直接证据，没有任何古个体被直接标识为客家人。",
+      event_year_start: -9798,
+    };
+    expect(isVisualCurationCandidate(background)).toBe(false);
+    expect(projectCurationEvents([
+      { sequence: 1, type: "claim.added", data: { claim: { claim_id: "c4", ...background } } },
+      { sequence: 2, type: "evidence.added", data: { evidence: { evidence_id: "context-1", curation_role: "context", title: "区域样本", event_year_start: -9000 } } },
+      { sequence: 3, type: "evidence.added", data: { evidence: { evidence_id: "ancient-context", source_kind: "ancient_genome_dataset", title: "未策展古样本", event_year_start: -2600 } } },
+      { sequence: 4, type: "evidence.added", data: { evidence: { evidence_id: "event-1", title: "1175年方言边界", event_year_start: 1175 } } },
+    ]).map((event) => event.event_id)).toEqual(["event-1"]);
+  });
+
+  it("renders a draggable timeline control", () => {
+    const html = renderToStaticMarkup(<Timeline events={[{ event_id: "e1", title: "节点", event_year_start: 100 }]} cursorYear={100} onChange={() => {}} onSelect={() => {}} />);
+    expect(html).toContain('type="range"');
+    expect(html).toContain('aria-label="拖动年代"');
+  });
+
+  it("renders professional and public report switches", () => {
+    const report = { title: "客家调查报告", subtitle: "专业历史文博版", overview: "摘要", sections: [], sources: [] };
+    const html = renderToStaticMarkup(<InvestigationReport report={report} audience="professional" loading={false} onAudienceChange={() => {}} />);
+    expect(html).toContain("专业版");
+    expect(html).toContain("科普版");
+    expect(html).toContain("客家调查报告");
+  });
+
+  it("rejects missing coordinates instead of projecting them to zero", () => {
+    expect(hasPoint({ latitude: null, longitude: null })).toBe(false);
+    expect(hasPoint({ latitude: "", longitude: "" })).toBe(false);
+    expect(hasPoint({ latitude: 30.453, longitude: 114.873 })).toBe(true);
   });
 
   it("keeps one live narration and only the final conclusion after completion", () => {
@@ -91,5 +164,9 @@ describe("M4 application shell", () => {
     expect(historicalYearFor({ event_year_start: 2008, event_year_end: 2010 })).toBe(2008);
     expect(historicalYearFor({ date_text: "东汉晚期" })).toBeNull();
     expect(formatHistoricalYear(-221)).toBe("公元前221年");
+  });
+
+  it("shows structured query-filter messages", () => {
+    expect(apiErrorMessage({ detail: { code: "out_of_scope", message: "请改问历史问题。" } }, 422)).toBe("请改问历史问题。");
   });
 });

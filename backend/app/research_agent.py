@@ -45,6 +45,7 @@ class ResearchFinding(BaseModel):
     narrative_role: Literal[
         "context", "event", "evidence", "debate", "gap", "legacy"
     ] = "evidence"
+    curation_role: Literal["event", "context"] = "context"
     scope_note: str | None = None
     evidence_level: Literal["view_model"] = "view_model"
     source_id: str
@@ -179,6 +180,7 @@ class KimiWebSearchResearchProvider:
                     "event_year 使用公历整数，公元前为负数，表示 claim 所属的历史时间；不得拿网页发布年份代替。"
                     "mean_bp 只用于古样本或考古对象的科学测年，表示相对 1950 年的距今年数。"
                     "narrative_role 只能是 context、event、evidence、debate、gap、legacy。无法确认的字段填 null。"
+                    "只有与调查对象直接对应的历史事件才标为event或legacy；区域背景、对照样本、阴性结果和证据缺口标为context、evidence、debate或gap。"
                     "最多返回 5 条能组成前后脉络、彼此作用不同的来源，避免用多篇文章重复同一消息。"
                     "找不到合格来源时输出 {\"items\":[]}."
                 ),
@@ -420,6 +422,11 @@ class ResearchAgent:
                 "source_kind": source_kind,
                 "authors": candidate.get("authors") if isinstance(candidate.get("authors"), list) else [],
                 "narrative_role": candidate.get("narrative_role") or "evidence",
+                "curation_role": (
+                    "event"
+                    if candidate.get("narrative_role") in {"event", "legacy"}
+                    else "context"
+                ),
                 "claim": str(candidate.get("claim") or candidate.get("summary") or candidate.get("title") or "").strip(),
                 "relation_to_question": str(
                     candidate.get("relation_to_question")

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from backend.app.evidence_tools import EvidenceTools
-from backend.app.investigation import InvestigationManager, encode_sse
+from backend.app.investigation import ClaimStore, InvestigationManager, encode_sse
 from backend.app.providers import MockLLM
+from backend.app.reports import build_investigation_report
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -47,7 +49,41 @@ class InvestigationLoopTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("event: narration\n", encoded)
         self.assertTrue(encoded.endswith("\n\n"))
 
+    async def test_sessions_and_events_survive_manager_restart(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            store = ClaimStore(Path(temporary_directory) / "investigations.sqlite")
+            first = InvestigationManager(self.manager.provider, self.manager.evidence_tools, claim_store=store)
+            for question in ("苏轼迁徙", "客家人迁徙"):
+                session = await first.create(question)
+                _ = [event async for event in session.stream()]
+
+            restored = InvestigationManager(
+                self.manager.provider,
+                self.manager.evidence_tools,
+                claim_store=ClaimStore(store.path),
+            )
+            summaries = restored.list_sessions()
+            self.assertEqual([item.question for item in summaries], ["客家人迁徙", "苏轼迁徙"])
+            first_session = next(
+                session for session in restored.sessions.values() if session.question == "苏轼迁徙"
+            )
+            events = [event async for event in first_session.stream()]
+            self.assertEqual(events[0]["type"], "investigation.started")
+            self.assertEqual(events[-1]["type"], "investigation.completed")
+
+    async def test_builds_professional_and_public_reports_from_dynamic_state(self) -> None:
+        session = await self.manager.create("Loschbour")
+        _ = [event async for event in session.stream()]
+
+        professional = build_investigation_report(session, "professional")
+        public = build_investigation_report(session, "public")
+
+        self.assertEqual(professional["subtitle"], "专业历史文博版")
+        self.assertEqual(public["subtitle"], "博物馆公众版")
+        self.assertTrue(professional["sections"])
+        self.assertTrue(public["sections"])
+        self.assertGreaterEqual(professional["stats"]["evidence"], len(professional["sources"]))
+
 
 if __name__ == "__main__":
     unittest.main()
-

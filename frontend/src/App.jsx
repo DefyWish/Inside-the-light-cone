@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import CurationMap from "./CurationMap.jsx";
+import InvestigationReport from "./InvestigationReport.jsx";
 import LifeTree from "./LifeTree.jsx";
 import Timeline, { formatYear } from "./Timeline.jsx";
 import { formatHistoricalYear, historicalYearFor } from "./TreeCanvas.jsx";
@@ -9,6 +10,12 @@ const STATES = { idle: "待命", connecting: "连接", running: "调查", planni
 const SOURCE_NAMES = { primary_chronicle: "史传", collected_works: "作品集", local_gazetteer: "方志", rare_book: "善本", memoir: "回忆录", ancient_genome_dataset: "古基因组", peer_reviewed_article: "论文", excavation_report: "发掘报告", official_database: "数据库", museum_catalog: "馆藏" };
 const STOP = new Set(["停止", "停止调查", "终止", "终止调查", "停下", "stop"]);
 
+export function apiErrorMessage(payload, status) {
+  if (typeof payload?.detail === "string") return payload.detail;
+  if (typeof payload?.detail?.message === "string") return payload.detail.message;
+  return `请求失败（${status}）`;
+}
+
 function itemName(item) { return item.title || item.claim || item.summary || item.site || item.topic || "证据"; }
 function period(item) {
   const a = item.event_year_start == null ? null : Number(item.event_year_start);
@@ -16,6 +23,20 @@ function period(item) {
   if (a != null && b != null && a !== b) return `${formatHistoricalYear(a)}—${formatHistoricalYear(b)}`;
   if (a != null || b != null) return formatHistoricalYear(a ?? b);
   return item.date_text || "年代待定";
+}
+
+function terminalPlace(value) {
+  if (!value) return null;
+  const parts = String(value).split(/[／/→、]/).map((part) => part.trim()).filter(Boolean);
+  return parts.at(-1) || null;
+}
+
+export function isVisualCurationCandidate(item) {
+  if (!item || item.timeline_eligible === false || item.curation_role === "context") return false;
+  if (["context", "gap", "debate"].includes(item.narrative_role) || item.record_type === "evidence_gap") return false;
+  if (item.source_kind === "ancient_genome_dataset" && item.curation_role !== "event" && !item.subject_ids?.length) return false;
+  const text = `${item.title || ""} ${item.summary || item.text || item.claim || ""} ${item.relation_to_question || ""}`;
+  return !/(深时|区域)(背景|基线)|比较基线|比较框架|古基因组.{0,20}基线|底色.{0,20}基线|背景而非直接|不能直接|不直接等同|没有任何古个体被直接|尚未与.+直接对应|阴性证据/.test(text);
 }
 
 export function buildStoryline(evidence, claims = []) {
@@ -45,25 +66,45 @@ export function buildInvestigationLog(events) {
 
 function normalize(item, id) {
   const year = item.event_year_start ?? historicalYearFor(item);
-  return { ...item, event_id: item.event_id || id, title: item.title || item.claim || item.summary || "节点", summary: item.summary || item.claim || item.note || item.title || "", branch: item.branch || SOURCE_NAMES[item.source_kind] || item.narrative_role || "证据线", event_type: item.event_type || item.narrative_role || item.record_type || "事件", event_year_start: year, event_year_end: item.event_year_end ?? year, historical_place: item.historical_place || item.place || item.site || item.political_entity || null, modern_place: item.modern_place || null, latitude: item.latitude ?? null, longitude: item.longitude ?? null, epistemic_status: item.epistemic_status || (item.evidence_level === "view_model" ? "view" : "fact"), source_ids: item.source_ids || (item.source_id ? [item.source_id] : []), claim_ids: item.claim_ids || [], evidence_ids: item.evidence_ids || (item.evidence_id ? [item.evidence_id] : []) };
+  const destination = item.movement?.to;
+  const destinationLatitude = destination?.latitude ?? destination?.lat;
+  const destinationLongitude = destination?.longitude ?? destination?.lon;
+  const latitude = destinationLatitude ?? item.latitude ?? null;
+  const longitude = destinationLongitude ?? item.longitude ?? null;
+  const coordinateBound = latitude != null && longitude != null;
+  const rawHistoricalPlace = item.historical_place || item.place || item.site || item.political_entity || null;
+  const historicalPlace = destination?.name || (coordinateBound ? terminalPlace(rawHistoricalPlace) : rawHistoricalPlace);
+  const modernPlace = coordinateBound ? terminalPlace(item.modern_place) : (item.modern_place || null);
+  return { ...item, event_id: item.event_id || id, title: item.title || item.claim || item.summary || "节点", summary: item.summary || item.claim || item.note || item.title || "", branch: item.branch || SOURCE_NAMES[item.source_kind] || item.narrative_role || "证据线", event_type: item.event_type || item.narrative_role || item.record_type || "事件", event_year_start: year, event_year_end: item.event_year_end ?? year, historical_place: historicalPlace, modern_place: modernPlace, latitude, longitude, epistemic_status: item.epistemic_status || (item.evidence_level === "view_model" ? "view" : "fact"), source_ids: item.source_ids || (item.source_id ? [item.source_id] : []), claim_ids: item.claim_ids || [], evidence_ids: item.evidence_ids || (item.evidence_id ? [item.evidence_id] : []) };
 }
 
 export function projectCurationEvents(events) {
+  const projected = new Map();
+  events.forEach((stream) => {
+    if (stream.type === "evidence.added" && stream.data.evidence?.record_type !== "evidence_gap") {
+      const item = stream.data.evidence;
+      if (isVisualCurationCandidate(item) && (historicalYearFor(item) != null || item.latitude != null)) {
+        const event = { ...normalize(item, item.evidence_id || `evidence:${stream.sequence}`), projection_kind: "evidence" };
+        projected.set(event.event_id, { ...(projected.get(event.event_id) || {}), ...event });
+      }
+    }
+    if (stream.type === "claim.added" && isVisualCurationCandidate(stream.data.claim) && historicalYearFor(stream.data.claim) != null) {
+      const claim = stream.data.claim;
+      const event = { ...normalize({ ...claim, title: claim.text, branch: claim.line, claim_ids: [claim.claim_id] }, `claim:${claim.claim_id}`), projection_kind: "claim" };
+      projected.set(event.event_id, { ...(projected.get(event.event_id) || {}), ...event });
+    }
+  });
   const formal = new Map();
   events.forEach((stream) => {
     if (!["curation.event_added", "curation.event_updated"].includes(stream.type) || !stream.data.event) return;
-    const event = normalize(stream.data.event, `event:${stream.sequence}`);
+    if (stream.data.event.epistemic_status === "gap") return;
+    const event = { ...normalize(stream.data.event, `event:${stream.sequence}`), projection_kind: "curation" };
     formal.set(event.event_id, { ...(formal.get(event.event_id) || {}), ...event });
   });
-  if (formal.size) return [...formal.values()].sort((a, b) => (a.event_year_start ?? Infinity) - (b.event_year_start ?? Infinity));
-  return events.flatMap((stream) => {
-    if (stream.type === "evidence.added" && stream.data.evidence?.record_type !== "evidence_gap") {
-      const item = stream.data.evidence;
-      if (historicalYearFor(item) != null || item.latitude != null) return [normalize(item, item.evidence_id || `evidence:${stream.sequence}`)];
-    }
-    if (stream.type === "claim.added" && historicalYearFor(stream.data.claim) != null) return [normalize({ ...stream.data.claim, title: stream.data.claim.text, branch: stream.data.claim.line, claim_ids: [stream.data.claim.claim_id] }, `claim:${stream.data.claim.claim_id}`)];
-    return [];
-  }).sort((a, b) => (a.event_year_start ?? Infinity) - (b.event_year_start ?? Infinity));
+  formal.forEach((event, eventId) => {
+    projected.set(eventId, { ...(projected.get(eventId) || {}), ...event });
+  });
+  return [...projected.values()].sort((a, b) => (a.event_year_start ?? Infinity) - (b.event_year_start ?? Infinity));
 }
 
 export default function App() {
@@ -71,64 +112,120 @@ export default function App() {
   const [question, setQuestion] = useState("");
   const [status, setStatus] = useState("idle");
   const [events, setEvents] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [notice, setNotice] = useState("");
   const [id, setId] = useState(null);
   const [selected, setSelected] = useState(null);
   const [cursorYear, setCursorYear] = useState(0);
+  const [reportAudience, setReportAudience] = useState("professional");
+  const [report, setReport] = useState(null);
+  const [reportLoading, setReportLoading] = useState(false);
   const sourceRef = useRef(null);
   const lastRef = useRef(0);
+  const historyRestoredRef = useRef(false);
   const curated = useMemo(() => projectCurationEvents(events), [events]);
-  const evidence = useMemo(() => events.filter((event) => event.type === "evidence.added").map((event) => event.data.evidence), [events]);
+  const evidence = useMemo(() => [...new Map(events.filter((event) => event.type === "evidence.added").map((event) => [event.data.evidence.evidence_id || event.sequence, event.data.evidence])).values()], [events]);
+  const timelineEvents = useMemo(() => curated.filter((event) => event.projection_kind !== "claim"), [curated]);
   const lines = useMemo(() => [...events].reverse().find((event) => event.type === "plan.updated")?.data.lines || [], [events]);
   const agent = useMemo(() => [...events].reverse().find((event) => event.type === "agent.status")?.data, [events]);
-  const latestYear = curated.map((event) => event.event_year_start).filter((year) => year != null).at(-1);
-  const active = curated.find((event) => event.event_id === selected) || curated.filter((event) => event.event_year_start == null || event.event_year_start <= cursorYear).at(-1);
-  const sources = active ? evidence.filter((item) => active.evidence_ids.includes(item.evidence_id) || active.source_ids.includes(item.source_id)) : [];
+  const latestYear = timelineEvents.map((event) => event.event_year_start).filter((year) => year != null).at(-1);
+  const active = curated.find((event) => event.event_id === selected) || timelineEvents.filter((event) => event.event_year_start == null || event.event_year_start <= cursorYear).at(-1);
+  const exactSources = active ? evidence.filter((item) => active.evidence_ids.includes(item.evidence_id)) : [];
+  const sourceCandidates = exactSources.length > 0 ? exactSources : (active ? evidence.filter((item) => active.source_ids.includes(item.source_id)) : []);
+  const sources = [...new Map(sourceCandidates.map((item) => [item.evidence_id || `${item.source_url}:${item.title}`, item])).values()];
 
   useEffect(() => { if (latestYear != null) setCursorYear(latestYear); }, [latestYear]);
-  useEffect(() => { if (curated.length) setSelected((value) => curated.some((event) => event.event_id === value) ? value : curated.at(-1).event_id); }, [curated]);
-  useEffect(() => () => sourceRef.current?.close(), []);
+  useEffect(() => { if (timelineEvents.length) setSelected((value) => curated.some((event) => event.event_id === value) ? value : timelineEvents.at(-1).event_id); }, [curated, timelineEvents]);
+  useEffect(() => { setReport(null); }, [id]);
+  useEffect(() => {
+    if (!id || status !== "completed") return undefined;
+    const controller = new AbortController();
+    setReportLoading(true);
+    fetch(`/api/investigations/${id}/report?audience=${reportAudience}`, { signal: controller.signal })
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error("报告生成失败")))
+      .then(setReport)
+      .catch((error) => { if (error.name !== "AbortError") setNotice(error.message); })
+      .finally(() => setReportLoading(false));
+    return () => controller.abort();
+  }, [id, status, reportAudience]);
+  async function refreshHistory() {
+    try {
+      const response = await fetch("/api/investigations");
+      if (response.ok) {
+        const items = await response.json();
+        setHistory(items);
+        if (!historyRestoredRef.current && !id && items.length > 0) {
+          historyRestoredRef.current = true;
+          openHistory(items[0]);
+        }
+      }
+    } catch {
+      return;
+    }
+  }
 
-  function connect(nextId, after = 0) {
-    sourceRef.current?.close(); setStatus("connecting");
+  useEffect(() => {
+    refreshHistory();
+    const timer = window.setInterval(refreshHistory, 4000);
+    return () => { window.clearInterval(timer); sourceRef.current?.close(); };
+  }, []);
+
+  function connect(nextId, after = 0, reset = false) {
+    sourceRef.current?.close(); setStatus("connecting"); setNotice("");
+    if (reset) { setEvents([]); setSelected(null); lastRef.current = 0; }
     const source = new EventSource(`/api/investigations/${nextId}/events${after ? `?after=${after}` : ""}`); sourceRef.current = source;
     source.onopen = () => setStatus("running");
     TYPES.forEach((type) => source.addEventListener(type, (message) => {
       const parsed = JSON.parse(message.data); lastRef.current = Math.max(lastRef.current, parsed.sequence); setEvents((old) => [...old, parsed]);
       if (type === "investigation.started") setQuestion(parsed.data.question);
-      if (type === "investigation.completed") { setStatus("completed"); source.close(); }
-      if (type === "investigation.stopped") { setStatus("stopped"); source.close(); }
-      if (type === "investigation.failed") { setStatus("failed"); source.close(); }
+      if (type === "investigation.completed") { setStatus("completed"); source.close(); refreshHistory(); }
+      if (type === "investigation.stopped") { setStatus("stopped"); source.close(); refreshHistory(); }
+      if (type === "investigation.failed") { setStatus("failed"); setNotice(parsed.data.message || "调查中断"); source.close(); refreshHistory(); }
     }));
   }
 
   async function create(nextQuestion) {
-    setEvents([]); setSelected(null); setQuestion(nextQuestion); setStatus("connecting"); lastRef.current = 0;
+    historyRestoredRef.current = true;
     const response = await fetch("/api/investigations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: nextQuestion }) });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const body = await response.json(); setId(body.investigation_id); setDraft(""); connect(body.investigation_id);
+    if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(apiErrorMessage(error, response.status)); }
+    const body = await response.json(); setEvents([]); setSelected(null); setQuestion(nextQuestion); setStatus("connecting"); lastRef.current = 0; setId(body.investigation_id); setDraft(""); connect(body.investigation_id); refreshHistory();
   }
 
   async function stop() { if (id) await fetch(`/api/investigations/${id}/stop`, { method: "POST" }); }
   async function submit(event) {
     event.preventDefault(); const text = draft.trim(); if (!text) return;
-    try { if (STOP.has(text.toLowerCase())) await stop(); else await create(text); } catch (error) { setStatus("failed"); setEvents([{ type: "investigation.failed", sequence: 0, data: { message: error.message } }]); }
+    try { setNotice(""); if (STOP.has(text.toLowerCase())) await stop(); else await create(text); } catch (error) { setNotice(error.message); }
   }
   async function follow() {
     const direction = draft.trim(); if (!direction || !id) return;
     if (STOP.has(direction.toLowerCase())) { await stop(); return; }
     const terminal = ["completed", "stopped", "failed"].includes(status);
     const response = await fetch(`/api/investigations/${id}/redirect`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ direction }) });
-    if (response.ok) { setDraft(""); if (terminal) connect(id, lastRef.current); }
+    if (!response.ok) { const error = await response.json().catch(() => ({})); setNotice(apiErrorMessage(error, response.status)); return; }
+    setNotice(""); setDraft(""); if (terminal) connect(id, lastRef.current); refreshHistory();
+  }
+
+  function openHistory(item) {
+    historyRestoredRef.current = true;
+    setId(item.investigation_id); setQuestion(item.question); connect(item.investigation_id, 0, true);
+  }
+
+  function changeTimeline(year) {
+    setCursorYear(year);
+    const nearest = timelineEvents.filter((event) => event.event_year_start == null || event.event_year_start <= year).at(-1);
+    setSelected(nearest?.event_id || null);
   }
 
   return <main className="curation-shell">
-    <header><strong>光锥之内</strong><span>历史策展 Agent</span><i>{STATES[status]}</i></header>
+    <header><strong>光锥之内</strong><span>历史策展 Agent</span><details className="history-menu"><summary>检索历史 · {history.length}</summary><div>{history.map((item) => <button type="button" key={item.investigation_id} className={item.investigation_id === id ? "active" : ""} onClick={() => openHistory(item)}><b>{item.question}</b><small>{STATES[item.status] || item.status} · {item.event_count}</small></button>)}</div></details><i>{STATES[status]}</i></header>
     <form className="curation-query" onSubmit={submit}><input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="问一个人物、家族、族群或遗址" aria-label="调查问题" /><button>新调查</button>{id && <button type="button" onClick={follow}>继续追问</button>}{status === "running" && <button type="button" onClick={stop}>停止</button>}</form>
     <section className="agent-ribbon"><b>{STATES[agent?.state] || STATES[status]}</b><span>{agent?.message || "Agent 将自行规划来源与主题枝"}</span>{agent?.active_line && <em>{agent.active_line}</em>}</section>
-    <section className="curation-grid"><article className="map-panel"><div className="panel-title"><h1>{question || "历史对象"}</h1><span>{curated.length} 节点</span></div><CurationMap events={curated} cursorYear={cursorYear} selectedId={active?.event_id} onSelect={setSelected} /></article><aside className="tree-panel"><div className="panel-title"><h2>生命树</h2><span>{lines.length} 主线</span></div><LifeTree events={curated} lines={lines} cursorYear={cursorYear} selectedId={active?.event_id} onSelect={setSelected} /></aside></section>
-    <Timeline events={curated} cursorYear={cursorYear} onChange={setCursorYear} selectedId={active?.event_id} onSelect={setSelected} />
+    {notice && <div className="query-notice">{notice}</div>}
+    <section className="curation-grid"><article className="map-panel"><div className="panel-title"><h1>{question || "历史对象"}</h1><span>{curated.length} 节点</span></div><CurationMap events={timelineEvents} cursorYear={cursorYear} selectedId={active?.event_id} onSelect={setSelected} /></article><aside className="tree-panel"><div className="panel-title"><h2>生命树</h2><span>{lines.length} 主线</span></div><LifeTree events={curated} lines={lines} cursorYear={cursorYear} selectedId={active?.event_id} onSelect={setSelected} /></aside></section>
+    <Timeline events={timelineEvents} cursorYear={cursorYear} onChange={changeTimeline} selectedId={active?.event_id} onSelect={setSelected} />
     {active && <article className="story-card"><div><span>{formatYear(active.event_year_start)}</span><span>{active.branch}</span><span>{active.event_type}</span></div><h2>{active.title}</h2><p>{active.summary}</p>{(active.historical_place || active.modern_place) && <small>{[active.historical_place, active.modern_place].filter(Boolean).join(" · ")}</small>}{sources.slice(0, 3).map((source) => source.source_url && <a key={source.evidence_id} href={source.source_url} target="_blank" rel="noreferrer">{SOURCE_NAMES[source.source_kind] || "来源"} · {itemName(source)}</a>)}</article>}
     {lines.length > 0 && <div className="plan-strip">{lines.map((line) => <span key={line.line} className={`line-${line.status}`}>{line.line}</span>)}</div>}
     <details className="agent-trace"><summary>调查过程 · {buildInvestigationLog(events).length}</summary>{buildInvestigationLog(events).map((row) => <p key={`${row.sequence}:${row.kind}`}><b>{row.title}</b>{row.detail && ` · ${row.detail}`}</p>)}</details>
+    {id && status === "completed" && <InvestigationReport report={report} audience={reportAudience} loading={reportLoading} onAudienceChange={setReportAudience} />}
   </main>;
 }

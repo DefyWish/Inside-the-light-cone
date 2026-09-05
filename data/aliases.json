@@ -23,58 +23,6 @@
     "curator_note": "两条证据主线：①考古——安阳西高穴大墓（2009年发掘），出土'魏武王常所用'刻铭石牌等，墓主认定为曹操（存在学术争议，应呈现正反双方）；②分子人类学——复旦大学团队曾以现代曹姓人群父系Y染色体探讨曹操家族遗传标记（媒体报道称'曹操DNA'，方法与结论在学界有保留，属间接证据，非曹操本人古DNA）。两条线都必须标注争议，不得当作定论。",
     "source": "策展：人工录入 v1（2026-09-01）"
   },
-  "阿尔茨海默Aβ假说": {
-    "type": "scientific_hypothesis",
-    "aliases": ["Aβ", "β淀粉样蛋白", "淀粉样蛋白级联假说", "amyloid cascade", "amyloid beta", "阿尔茨海默", "老年痴呆"],
-    "related_places": [],
-    "seed_queries": ["Aβ 淀粉样蛋白级联假说", "aducanumab Aduhelm", "lecanemab 仑卡奈单抗", "Lesné 2006 Aβ*56", "solanezumab 失败", "阿尔茨海默 药物 失败"],
-    "timeline": [
-      {
-        "place": "假说奠基",
-        "period": "1984–1992",
-        "event_year_start": 1984,
-        "event_year_end": 1992,
-        "note": "1984年Glenner与Wong从脑血管淀粉样沉积中测序出Aβ；1991年发现家族性阿尔茨海默病的APP基因突变；1992年Hardy等提出'淀粉样蛋白级联假说'：Aβ沉积是疾病级联反应的源头。"
-      },
-      {
-        "place": "AN1792主动免疫",
-        "period": "1999–2002",
-        "event_year_start": 1999,
-        "event_year_end": 2002,
-        "note": "1999年Schenk等在PDAPP小鼠中以Aβ免疫清除斑块（AN1792）；2002年该疫苗II期因约6%受试者发生脑膜脑炎而中止——第一次'机制对但毒性窗口不足'的失败。"
-      },
-      {
-        "place": "Aβ*56论文",
-        "period": "2006",
-        "event_year_start": 2006,
-        "event_year_end": 2006,
-        "note": "Lesné等在Nature报道Aβ*56寡聚体致大鼠记忆损伤，成为寡聚体路线的奠基性论文，被引逾两千次。2022年Science调查报道其图像涉嫌操纵，2024年该论文被撤稿。"
-      },
-      {
-        "place": "抗体临床连败",
-        "period": "2008–2019",
-        "event_year_start": 2008,
-        "event_year_end": 2019,
-        "note": "bapineuzumab（2012）、solanezumab（2016 EXPEDITION3）、gantenerumab等III期相继失败；aducanumab两项III期2019年因无效分析中止，后Biogen重新分析声称其中一项（EMERGE）阳性。"
-      },
-      {
-        "place": "Aduhelm争议批准",
-        "period": "2021",
-        "event_year_start": 2021,
-        "event_year_end": 2021,
-        "note": "2021年6月FDA以'Aβ斑块减少'为替代终点加速批准Aduhelm；外部专家咨询委员会以10比1反对，三名委员辞职抗议。2024年Biogen将其撤市。"
-      },
-      {
-        "place": "Leqembi与假说存续",
-        "period": "2023",
-        "event_year_start": 2023,
-        "event_year_end": 2023,
-        "note": "2023年lecanemab（Leqembi）CLARITY-AD显示认知衰退减缓约27%（幅度存在争议，伴ARIA脑水肿/出血风险），获FDA完全批准——Aβ路线'终于被证明'与'效应量微弱'两种叙事并存。"
-      }
-    ],
-    "curator_note": "这是'失败机制谱系'的标本案例：官方口径'疗效不足'背后至少有六种互相竞争的解释——①假说本身错误（Aβ是标志物而非病因）；②干预太晚（病理早于症状数十年）；③早期试验未用生物标志物确证患者脑内Aβ阳性（患者分层失败）；④暴露/剂量/血脑屏障不足；⑤选错了Aβ形态（斑块 vs 寡聚体 vs 原纤维）；⑥终点设计与疾病异质性。后续项目（lecanemab等）的改进（PET确证Aβ、更早干预、更高剂量）可被视为在分别修复某一次历史失败。同时存在两条对立明线：'Aβ路线终于被临床验证'（Leqembi获批）与'效应微弱且奠基文献造假，方向仍可疑'（Lesné撤稿+Aduhelm撤市）——必须并陈，交用户判断。",
-    "source": "策展：参谋长起草 v1（2026-09-01），待医药背景队友精修后转正"
-  },
   "苏轼": {
     "type": "historical_person",
     "aliases": ["苏东坡", "东坡居士", "苏子瞻", "Su Shi", "Su Dongpo"],
@@ -82,5 +30,22 @@
     "seed_queries": ["苏轼 生平", "苏轼 迁徙", "苏轼 任职", "苏轼 作品", "苏轼 思想", "苏轼 后世影响"],
     "curator_note": "只用于实体归一化与检索扩展；事件、路线和主题枝由调查 Agent 根据用户问题和本轮证据生成。",
     "source": "策展实体卡 v1（2026-09-05）"
+  },
+  "客家人": {
+    "type": "historical_population",
+    "aliases": ["客家", "客家民系", "Hakka", "Hakka people", "Hakkanese"],
+    "related_places": ["中原", "赣州", "汀州", "长汀", "梅州", "兴宁", "闽西", "粤东", "福建土楼", "台湾"],
+    "seed_queries": [
+      "客家人 迁徙",
+      "客家 民系形成",
+      "客语 方言形成",
+      "客家 传统聚落 考古",
+      "客家 现代人群遗传",
+      "福建 新石器时代 古基因组",
+      "Qihe Cave Fujian ancient DNA",
+      "Xitoucun Tanshishan ancient genome"
+    ],
+    "curator_note": "主题为客家人的迁徙、古基因组与现代分子人类学与考古等多尺度证据。传统迁徙叙事、语言形成、聚落传播、现代群体遗传和华南古基因组各自保留证据边界；华南史前样本提供区域祖源背景，不直接等同于历史时期的客家身份。",
+    "source": "策展实体卡 v1（2026-09-06）"
   }
 }

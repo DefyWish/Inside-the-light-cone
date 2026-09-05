@@ -12,23 +12,52 @@ export function projectChinaPoint(longitude, latitude) {
   };
 }
 
-function hasPoint(value) {
-  return Number.isFinite(Number(value?.longitude)) && Number.isFinite(Number(value?.latitude));
+function isCoordinate(value) {
+  return value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
+}
+
+export function hasPoint(value) {
+  return isCoordinate(value?.longitude) && isCoordinate(value?.latitude);
 }
 
 function movementPoint(value) {
   if (!value) return null;
   const longitude = value.longitude ?? value.lon;
   const latitude = value.latitude ?? value.lat;
-  if (!Number.isFinite(Number(longitude)) || !Number.isFinite(Number(latitude))) return null;
+  if (!isCoordinate(longitude) || !isCoordinate(latitude)) return null;
   return projectChinaPoint(longitude, latitude);
+}
+
+function displayPlace(event) {
+  const raw = event.movement?.to?.name || event.historical_place || event.modern_place || event.title;
+  const parts = String(raw || "").split(/[／/→、]/).map((part) => part.trim()).filter(Boolean);
+  return parts.at(-1) || event.title;
 }
 
 export default function CurationMap({ events, cursorYear, selectedId, onSelect }) {
   const visible = events.filter((event) => (
     event.event_year_start == null || event.event_year_start <= cursorYear
-  ));
-  const points = visible.filter(hasPoint);
+  )).sort((a, b) => (a.event_year_start ?? Infinity) - (b.event_year_start ?? Infinity));
+  const routes = visible.flatMap((event) => {
+    const start = movementPoint(event.movement?.from);
+    const end = movementPoint(event.movement?.to);
+    if (!start || !end || (Math.abs(start.x - end.x) < 1 && Math.abs(start.y - end.y) < 1)) return [];
+    const startYear = Number(event.event_year_start);
+    const endYear = Number(event.event_year_end);
+    const progress = Number.isFinite(startYear) && Number.isFinite(endYear) && endYear > startYear
+      ? Math.min(1, Math.max(0.015, (cursorYear - startYear) / (endYear - startYear)))
+      : 1;
+    return [{
+      event,
+      start,
+      end,
+      progress,
+      startName: event.movement?.from?.name || "起点",
+      endName: event.movement?.to?.name || displayPlace(event),
+    }];
+  });
+  const movingIds = new Set(routes.filter(({ progress }) => progress < 1).map(({ event }) => event.event_id));
+  const points = visible.filter((event) => hasPoint(event) && !movingIds.has(event.event_id));
 
   return (
     <div className="map-wrap">
@@ -44,10 +73,7 @@ export default function CurationMap({ events, cursorYear, selectedId, onSelect }
         </defs>
         <image href="/maps/china-standard-outline.svg" width={WIDTH} height={HEIGHT} preserveAspectRatio="xMidYMid meet" className="map-outline" />
         <g className="route-layer">
-          {visible.map((event) => {
-            const start = movementPoint(event.movement?.from);
-            const end = movementPoint(event.movement?.to);
-            if (!start || !end) return null;
+          {routes.map(({ event, start, end, progress }) => {
             const bend = Math.max(18, Math.abs(end.x - start.x) * 0.12);
             const path = `M ${start.x} ${start.y} Q ${(start.x + end.x) / 2} ${Math.min(start.y, end.y) - bend} ${end.x} ${end.y}`;
             return (
@@ -55,10 +81,28 @@ export default function CurationMap({ events, cursorYear, selectedId, onSelect }
                 key={`route:${event.event_id}`}
                 d={path}
                 className={event.event_id === selectedId ? "route route-active" : "route"}
-                markerEnd="url(#route-arrow)"
+                pathLength="100"
+                style={{ strokeDasharray: `${progress * 100} 100` }}
+                markerEnd={progress >= 1 ? "url(#route-arrow)" : undefined}
               />
             );
           })}
+        </g>
+        <g className="route-anchor-layer">
+          {routes.flatMap(({ event, start, end, progress, startName, endName }) => [
+            <g key={`anchor:start:${event.event_id}`} transform={`translate(${start.x} ${start.y})`}>
+              <circle className="route-anchor" r="10" />
+              <circle className="route-anchor-core" r="4" />
+              <title>{startName}</title>
+            </g>,
+            progress >= 1 ? (
+              <g key={`anchor:end:${event.event_id}`} transform={`translate(${end.x} ${end.y})`}>
+                <circle className="route-anchor" r="10" />
+                <circle className="route-anchor-core" r="4" />
+                <title>{endName}</title>
+              </g>
+            ) : null,
+          ])}
         </g>
         <g className="point-layer">
           {points.map((event) => {
@@ -78,7 +122,7 @@ export default function CurationMap({ events, cursorYear, selectedId, onSelect }
                 <circle className="map-point-core" r={active ? 9 : 7} />
                 {active && (
                   <text x="20" y="-18" className="map-point-label">
-                    {event.historical_place || event.modern_place || event.title}
+                    {displayPlace(event)}
                   </text>
                 )}
                 <title>{event.title}</title>

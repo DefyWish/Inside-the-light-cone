@@ -12,6 +12,21 @@ from pydantic import BaseModel, Field
 
 ToolStatus = Literal["ok", "no_data", "no_genotype", "unknown_place"]
 
+SOURCE_KIND_ALIASES = {
+    "史传": "primary_chronicle",
+    "正史": "primary_chronicle",
+    "作品集": "collected_works",
+    "方志": "local_gazetteer",
+    "善本": "rare_book",
+    "回忆录": "memoir",
+    "古基因组": "ancient_genome_dataset",
+    "论文": "peer_reviewed_article",
+    "考古报告": "excavation_report",
+    "发掘报告": "excavation_report",
+    "数据库": "official_database",
+    "馆藏目录": "museum_catalog",
+}
+
 
 class ToolCall(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
@@ -534,7 +549,8 @@ class EvidenceTools:
     def _search_curated_sources(self, arguments: dict[str, Any]) -> ToolResult:
         tool = "search_curated_sources"
         query = str(arguments.get("query", "")).strip()
-        source_kind = str(arguments.get("source_kind", "")).strip()
+        requested_kind = str(arguments.get("source_kind", "")).strip()
+        source_kind = SOURCE_KIND_ALIASES.get(requested_kind, requested_kind)
         if not query:
             return ToolResult(tool=tool, status="no_data", message="需要检索主题。")
         card = self._alias_card(query)

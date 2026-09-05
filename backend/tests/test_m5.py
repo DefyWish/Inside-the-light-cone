@@ -99,6 +99,7 @@ class ResearchAndRedirectTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(outcome.items), 1)
         self.assertEqual(outcome.items[0].source_url, "https://doi.org/10.1000/example")
         self.assertEqual(outcome.items[0].event_year_start, 220)
+        self.assertEqual(outcome.items[0].curation_role, "context")
         self.assertEqual(
             outcome.items[0].provenance["admission_gate"],
             "scholarly_source_and_verbatim_quote",
