@@ -1,0 +1,86 @@
+{
+  "fixture_version": 1,
+  "scenarios": [
+    {
+      "id": "development_loschbour",
+      "match_contains": ["loschbour"],
+      "actions": [
+        {
+          "type": "tool_call",
+          "motivation": "先确认这个个体在公开古基因组目录中的身份、年代和地点。",
+          "tool": "search_ancient_samples",
+          "arguments": {"individual": "{{question}}", "limit": 4}
+        },
+        {
+          "type": "tool_call",
+          "motivation": "接着查看论文已报告的亲缘信息和本地预计算遗传近邻。",
+          "tool": "search_genetic_relations",
+          "arguments": {"individual": "{{question}}"}
+        },
+        {
+          "type": "tool_call",
+          "motivation": "再定位与这个个体直接关联的论文和数据来源。",
+          "tool": "search_literature",
+          "arguments": {"individual": "{{question}}", "limit": 8}
+        },
+        {
+          "type": "claim",
+          "claim": "{{question}} 是公开古基因组目录中身份、年代与出土地点明确的已发表个体",
+          "evidence_level": "fact_genomic",
+          "links": [
+            {"target": "{{question}}", "predicate": "derived_from", "note": "AADR v66.p1 目录记录"}
+          ]
+        },
+        {
+          "type": "narration",
+          "text": "本地古基因组记录、遗传关系查询和文献索引已经完成。每条可见证据都保留原始标识、来源和方法字段；缺失项保持为空。"
+        },
+        {
+          "type": "finish",
+          "text": "调查完成，可从任一证据节点继续追问。"
+        }
+      ]
+    },
+    {
+      "id": "development_default",
+      "match_contains": [],
+      "actions": [
+        {
+          "type": "tool_call",
+          "motivation": "先把输入当作个体标识在本地古基因组目录中检索。",
+          "tool": "search_ancient_samples",
+          "arguments": {"individual": "{{question}}", "limit": 6}
+        },
+        {
+          "type": "tool_call",
+          "motivation": "同步检查本地文献索引是否记录了这个输入。",
+          "tool": "search_literature",
+          "arguments": {"individual": "{{question}}", "limit": 6}
+        },
+        {
+          "type": "tool_call",
+          "motivation": "当前 Mock 无法判断输入是地点、人物还是传说，因此明确保留分类缺口。",
+          "tool": "mark_evidence_gap",
+          "arguments": {
+            "topic": "{{question}} 的实体类型与后续调查方向",
+            "reason": "MockLLM 仅执行通用保底路径"
+          }
+        },
+        {
+          "type": "claim",
+          "claim": "{{question}} 在本地公开证据目录中的命中与缺口状态已确认",
+          "evidence_level": "view_model"
+        },
+        {
+          "type": "narration",
+          "text": "通用本地检索已经结束。命中的证据与空结果都已进入事件流。"
+        },
+        {
+          "type": "finish",
+          "text": "本轮 Mock 调查完成。"
+        }
+      ]
+    }
+  ]
+}
+

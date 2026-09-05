@@ -1,0 +1,13 @@
+name: jialuo-tree
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.11
+  - numpy
+  - fastapi
+  - uvicorn
+  - plink=1.90b7.7
+  - eigensoft=8.0.0
+  - admixtools=8.0.2
+
