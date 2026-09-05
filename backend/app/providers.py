@@ -4,6 +4,7 @@ import asyncio
 import http.client
 import json
 import os
+import ssl
 import threading
 import time
 import urllib.error
@@ -17,6 +18,26 @@ from pydantic import BaseModel, Field
 
 
 REMOTE_HTTP_LOCK = threading.RLock()
+
+
+def _build_ssl_context() -> ssl.SSLContext:
+    # macOS conda 环境自带 openssl 证书目录常为空，urllib 默认上下文找不到 CA 根；
+    # 统一改用 certifi 的 CA 包，缺失时退回系统默认。
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
+
+
+SSL_CONTEXT = _build_ssl_context()
+
+# 部分中转站（Cloudflare）按 UA 封禁 Python-urllib，统一伪装浏览器 UA
+HTTP_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+)
 
 
 class ClaimLink(BaseModel):
@@ -352,7 +373,7 @@ class OpenAICompatibleLLM(LLMProvider):
                         "messages": self._messages(state),
                     }
                     if self.config.model.casefold().startswith("kimi-k3"):
-                        request_body["reasoning_effort"] = "medium"
+                        request_body["reasoning_effort"] = "high"
                     if self.uses_native_tools:
                         request_body["tools"] = self.native_tools
                     payload = json.dumps(
@@ -365,10 +386,11 @@ class OpenAICompatibleLLM(LLMProvider):
                         headers={
                             "Authorization": f"Bearer {self.config.api_key}",
                             "Content-Type": "application/json",
+                            "User-Agent": HTTP_USER_AGENT,
                         },
                         method="POST",
                     )
-                    with urllib.request.urlopen(request, timeout=self.config.timeout_seconds) as response:
+                    with urllib.request.urlopen(request, timeout=self.config.timeout_seconds, context=SSL_CONTEXT) as response:
                         return json.loads(response.read().decode("utf-8"))
             except urllib.error.HTTPError as error:
                 last_error = error

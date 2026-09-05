@@ -17,8 +17,8 @@
 ## 验证
 
 ```bash
-envs/jialuo-tree/bin/python scripts/verify_m1.py
-envs/jialuo-tree/bin/python -m unittest discover -s backend/tests -v
+envs/kalpatower/bin/python scripts/verify_m1.py
+envs/kalpatower/bin/python -m unittest discover -s backend/tests -v
 cd frontend
 npm test
 npm run build

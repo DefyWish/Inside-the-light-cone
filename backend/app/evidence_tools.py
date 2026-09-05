@@ -517,7 +517,7 @@ class EvidenceTools:
         reason = str(arguments.get("reason", "")).strip()
         if not topic:
             return ToolResult(tool=tool, status="no_data", message="需要空白主题。")
-        gap_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"jialuo-tree:gap:{topic}:{reason}"))
+        gap_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"kalpatower:gap:{topic}:{reason}"))
         return ToolResult(
             tool=tool,
             status="ok",

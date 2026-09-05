@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
-from .providers import REMOTE_HTTP_LOCK
+from .providers import HTTP_USER_AGENT, REMOTE_HTTP_LOCK, SSL_CONTEXT
 
 
 class ResearchFinding(BaseModel):
@@ -122,13 +122,14 @@ class KimiWebSearchResearchProvider:
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
+                "User-Agent": HTTP_USER_AGENT,
             },
             method=method,
         )
         last_error: Exception | None = None
         for attempt in range(2):
             try:
-                with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                with urllib.request.urlopen(request, timeout=self.timeout_seconds, context=SSL_CONTEXT) as response:
                     return json.loads(response.read().decode("utf-8"))
             except urllib.error.HTTPError as error:
                 last_error = error
@@ -295,7 +296,7 @@ class ResearchStagingStore:
         finding_id = str(
             uuid.uuid5(
                 uuid.NAMESPACE_URL,
-                f"jialuo-tree:research:{query}:{finding.source_url}:{finding.quote}",
+                f"kalpatower:research:{query}:{finding.source_url}:{finding.quote}",
             )
         )
         with sqlite3.connect(self.path) as connection:

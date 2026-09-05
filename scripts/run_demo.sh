@@ -5,12 +5,19 @@ project_dir="${0:A:h:h}"
 if [[ -x "$project_dir/.venv/bin/python" ]]; then
   python_bin="$project_dir/.venv/bin/python"
 else
-  python_bin="$project_dir/envs/jialuo-tree/bin/python"
+  python_bin="$project_dir/envs/kalpatower/bin/python"
 fi
 
 if [[ ! -x "$python_bin" ]]; then
   print -u2 "缺少项目环境：先执行 ./scripts/setup_demo.sh"
   exit 1
+fi
+
+# LLM key 等配置从 .env 读取（不存在则自动走 Mock 保底）
+if [[ -f "$project_dir/.env" ]]; then
+  set -a
+  source "$project_dir/.env"
+  set +a
 fi
 
 cleanup() {

@@ -239,7 +239,7 @@ class ProviderAdapterTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(narration, AgentAction(type="narration", text="阶段叙述"))
         self.assertEqual(finished, AgentAction(type="finish", text="最终故事"))
 
-    async def test_kimi_k3_uses_low_reasoning_and_longer_timeout(self) -> None:
+    async def test_kimi_k3_uses_high_reasoning_and_longer_timeout(self) -> None:
         ChatHandler.response_payload = {
             "choices": [{"message": {"content": '{"type":"finish","text":"ok"}'}}]
         }
@@ -262,7 +262,7 @@ class ProviderAdapterTest(unittest.IsolatedAsyncioTestCase):
             server.server_close()
             thread.join(timeout=2)
 
-        self.assertEqual(ChatHandler.last_request["reasoning_effort"], "low")
+        self.assertEqual(ChatHandler.last_request["reasoning_effort"], "high")
         self.assertTrue(ChatHandler.last_request["tools"])
         tool_names = {
             item["function"]["name"] for item in ChatHandler.last_request["tools"]
