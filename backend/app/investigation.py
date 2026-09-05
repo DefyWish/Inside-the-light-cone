@@ -251,6 +251,7 @@ class InvestigationManager:
             return None
         if session.done:
             return StopAccepted(investigation_id=investigation_id, mode="already_done")
+        await self._publish_agent_status(session, "stopped", "调查已停止。")
         await session.publish("investigation.stopped", {"message": "调查已停止。"})
         task = self.tasks.get(investigation_id)
         if task is not None:
@@ -332,6 +333,63 @@ class InvestigationManager:
             item.get("record_type") == "evidence_gap"
             for observation in state.observations
             for item in observation.get("items", [])
+        )
+
+    @staticmethod
+    def _ensure_evidence_id(item: dict[str, Any]) -> str:
+        existing = item.get("evidence_id")
+        if existing:
+            return str(existing)
+        identity = {
+            key: item.get(key)
+            for key in (
+                "source_id", "source_url", "title", "claim", "individual_id",
+                "genetic_id", "site", "event_year_start", "event_year_end",
+            )
+            if item.get(key) is not None
+        }
+        evidence_id = "ev:" + uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            json.dumps(identity or item, ensure_ascii=False, sort_keys=True, default=str),
+        ).hex
+        item["evidence_id"] = evidence_id
+        return evidence_id
+
+    async def _publish_agent_status(
+        self,
+        session: InvestigationSession,
+        status: str,
+        message: str,
+        activity: str | None = None,
+        pending_research: int = 0,
+    ) -> None:
+        state = session.state
+        active_line = next(
+            (line["line"] for line in state.lines if line["status"] == "open"),
+            None,
+        )
+        gaps = [
+            item.get("topic") or item.get("title")
+            for observation in state.observations
+            for item in observation.get("items", [])
+            if item.get("record_type") == "evidence_gap"
+        ]
+        await session.publish(
+            "agent.status",
+            {
+                "state": status,
+                "objective": state.question,
+                "message": message,
+                "activity": activity,
+                "active_line": active_line,
+                "next_intention": active_line,
+                "pending_research": pending_research,
+                "hypotheses": [
+                    {"id": claim["claim_id"], "text": claim["text"], "status": claim["status"]}
+                    for claim in state.claims[-4:]
+                ],
+                "gaps": [gap for gap in gaps[-4:] if gap],
+            },
         )
 
     @staticmethod
@@ -456,6 +514,44 @@ class InvestigationManager:
             if self.claim_store is not None:
                 self.claim_store.save_relation(session.id, relation_payload)
 
+    async def _record_curation_event(self, session: InvestigationSession, action: Any) -> None:
+        if action.event is None:
+            return
+        payload = action.event.model_dump()
+        references = payload["source_ids"] + payload["claim_ids"] + payload["evidence_ids"]
+        if not references and payload["epistemic_status"] != "gap":
+            session.state.observations.append(
+                {
+                    "tool": "system",
+                    "status": "continue_required",
+                    "message": "策展节点缺少来源、判断或证据引用，请先检索再生成。",
+                }
+            )
+            return
+        if not payload.get("event_id"):
+            identity = ":".join(
+                [
+                    *payload["subject_ids"],
+                    payload["branch"],
+                    payload["title"],
+                    str(payload.get("event_year_start")),
+                    str(payload.get("event_year_end")),
+                ]
+            )
+            payload["event_id"] = "evt:" + uuid.uuid5(uuid.NAMESPACE_URL, identity).hex
+        previous = next(
+            (item for item in session.state.curation_events if item["event_id"] == payload["event_id"]),
+            None,
+        )
+        if previous is None:
+            session.state.curation_events.append(payload)
+            event_type = "curation.event_added"
+        else:
+            previous.update(payload)
+            payload = previous
+            event_type = "curation.event_updated"
+        await session.publish(event_type, {"event": payload})
+
     async def _research_gap(
         self,
         session: InvestigationSession,
@@ -473,6 +569,7 @@ class InvestigationManager:
             "search_genetic_relations": "亲缘分析原始论文、补充材料或正式数据记录",
             "search_archaeological_sites": "正式发掘报告、考古期刊论文、科研机构或博物馆目录",
             "search_place_history": "历史地理学术成果、方志原文或权威地名数据库",
+            "search_curated_sources": "史传、作品集、方志、发掘报告、古基因组数据集或同行评议论文",
         }.get(tool_name, "可核验的学术原始来源")
         query = (
             f"研究问题：{question}\n"
@@ -487,11 +584,14 @@ class InvestigationManager:
             {"query": query, "gap_tool": tool_name},
         )
         outcome = await self.research_agent.investigate(query)
+        outcome_items = [item.model_dump() for item in outcome.items]
+        for item in outcome_items:
+            self._ensure_evidence_id(item)
         state.observations.append(
             {
                 "tool": "research_agent",
                 "status": outcome.status,
-                "items": [item.model_dump() for item in outcome.items],
+                "items": outcome_items,
                 "message": outcome.message,
             }
         )
@@ -508,13 +608,13 @@ class InvestigationManager:
                 **outcome.model_dump(),
             },
         )
-        for item in outcome.items:
+        for item in outcome_items:
             await session.publish(
                 "evidence.added",
                 {
                     "tool": "research_agent",
                     "status": "ok",
-                    "evidence": item.model_dump(),
+                    "evidence": item,
                 },
             )
 
@@ -526,6 +626,11 @@ class InvestigationManager:
                 "investigation.started",
                 {"question": session.question, "provider": session.provider},
             )
+        await self._publish_agent_status(
+            session,
+            "planning" if not state.lines else "investigating",
+            "正在拆解问题。" if not state.lines else "正在继续调查。",
+        )
         try:
             for _ in range(self.maximum_steps):
                 # 真异步：只清理已完成的外勤任务，绝不原地等待
@@ -546,7 +651,16 @@ class InvestigationManager:
                         "tool.called",
                         {"tool": action.tool, "arguments": action.arguments},
                     )
+                    await self._publish_agent_status(
+                        session,
+                        "investigating",
+                        action.motivation or "正在检索证据。",
+                        activity=action.tool,
+                        pending_research=len(pending_research),
+                    )
                     result = self.evidence_tools.execute(action.tool, action.arguments)
+                    for item in result.items:
+                        self._ensure_evidence_id(item)
                     result_payload = result.model_dump()
                     state.observations.append(result_payload)
                     await session.publish("tool.result", result_payload)
@@ -578,12 +692,40 @@ class InvestigationManager:
                             )
                         )
                         pending_research.add(task)
+                        await self._publish_agent_status(
+                            session,
+                            "researching",
+                            "本地证据不足，正在外部补证。",
+                            activity=action.tool,
+                            pending_research=len(pending_research),
+                        )
                     continue
                 if action.type == "plan":
                     await self._update_plan(session, action)
+                    await self._publish_agent_status(
+                        session,
+                        "investigating",
+                        "调查主线已更新。",
+                        pending_research=len(pending_research),
+                    )
                     continue
                 if action.type == "claim":
                     await self._record_claim(session, action)
+                    await self._publish_agent_status(
+                        session,
+                        "synthesizing",
+                        "正在校准判断与证据关系。",
+                        pending_research=len(pending_research),
+                    )
+                    continue
+                if action.type == "curation_event":
+                    await self._record_curation_event(session, action)
+                    await self._publish_agent_status(
+                        session,
+                        "synthesizing",
+                        "正在把证据投影到地图、生命树与时间轴。",
+                        pending_research=len(pending_research),
+                    )
                     continue
                 if action.type == "narration":
                     await session.publish("narration", {"text": action.text or ""})
@@ -631,6 +773,7 @@ class InvestigationManager:
                         "relations": len(state.relations),
                     },
                 )
+                await self._publish_agent_status(session, "completed", "策展调查已完成。")
                 await session.finish()
                 return
             if pending_research:
@@ -639,6 +782,7 @@ class InvestigationManager:
                 "investigation.completed",
                 {"summary": "调查达到本轮步数上限。", "steps": state.provider_cursor},
             )
+            await self._publish_agent_status(session, "completed", "本轮调查已收束。")
         except asyncio.CancelledError:
             for task in pending_research:
                 task.cancel()
@@ -648,6 +792,7 @@ class InvestigationManager:
         except Exception as error:
             if pending_research:
                 await asyncio.gather(*tuple(pending_research), return_exceptions=True)
+            await self._publish_agent_status(session, "failed", "调查中断。")
             await session.publish(
                 "investigation.failed",
                 {"message": str(error), "error_type": type(error).__name__},

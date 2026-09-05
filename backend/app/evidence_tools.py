@@ -54,6 +54,11 @@ TOOL_DEFINITIONS = [
         "arguments": {"place": "string"},
     },
     {
+        "name": "search_curated_sources",
+        "description": "检索本地已核验的史传、作品集、方志、考古报告、古基因组数据、论文与馆藏目录。结果是证据候选，策展结构由 Agent 按当前问题生成。",
+        "arguments": {"query": "string", "source_kind": "string?", "limit": "integer?"},
+    },
+    {
         "name": "search_literature",
         "description": "按关键词、DOI、论文简称或古样本查询本地文献索引。",
         "arguments": {"query": "string?", "individual": "string?", "limit": "integer?"},
@@ -120,6 +125,7 @@ class EvidenceTools:
         numeric_dir: Path,
         research_staging_path: Path | None = None,
         aliases_path: Path | None = None,
+        curation_dir: Path | None = None,
     ) -> None:
         self.catalog_path = catalog_path
         self.research_staging_path = research_staging_path
@@ -127,11 +133,19 @@ class EvidenceTools:
         self.aliases: dict[str, Any] = {}
         if aliases_path and aliases_path.exists():
             self.aliases = json.loads(aliases_path.read_text(encoding="utf-8"))
+        self.curated_sources: list[dict[str, Any]] = []
+        if curation_dir and curation_dir.exists():
+            for source_path in sorted(curation_dir.glob("*.json")):
+                payload = json.loads(source_path.read_text(encoding="utf-8"))
+                records = payload.get("records", []) if isinstance(payload, dict) else payload
+                if isinstance(records, list):
+                    self.curated_sources.extend(item for item in records if isinstance(item, dict))
         self._dispatch = {
             "search_ancient_samples": self._search_ancient_samples,
             "search_genetic_relations": self._search_genetic_relations,
             "search_archaeological_sites": self._search_archaeological_sites,
             "search_place_history": self._search_place_history,
+            "search_curated_sources": self._search_curated_sources,
             "search_literature": self._search_literature,
             "mark_evidence_gap": self._mark_evidence_gap,
         }
@@ -430,6 +444,12 @@ class EvidenceTools:
         limit = self._limit(arguments)
         items: list[dict[str, Any]] = []
 
+        curated = self._search_curated_sources(
+            {"query": query or individual, "limit": limit}
+        )
+        if curated.status == "ok":
+            items.extend(curated.items)
+
         card = self._alias_card(query or individual)
         if card:
             items.append(
@@ -510,6 +530,45 @@ class EvidenceTools:
                 message=message, alias_only=alias_only,
             )
         return ToolResult(tool=tool, status="no_data", message="本地文献索引没有匹配记录。")
+
+    def _search_curated_sources(self, arguments: dict[str, Any]) -> ToolResult:
+        tool = "search_curated_sources"
+        query = str(arguments.get("query", "")).strip()
+        source_kind = str(arguments.get("source_kind", "")).strip()
+        if not query:
+            return ToolResult(tool=tool, status="no_data", message="需要检索主题。")
+        card = self._alias_card(query)
+        terms = [query]
+        if card:
+            terms.extend([card["key"], *card.get("aliases", []), *card.get("seed_queries", [])])
+        normalized_terms = [term.casefold() for term in terms if term]
+        ranked: list[tuple[int, dict[str, Any]]] = []
+        for source in self.curated_sources:
+            if source_kind and source.get("source_kind") != source_kind:
+                continue
+            haystack = json.dumps(source, ensure_ascii=False).casefold()
+            score = sum(1 for term in normalized_terms if term in haystack)
+            if query.casefold() in haystack:
+                score += 3
+            if score:
+                item = {
+                    "record_type": "curated_source",
+                    "evidence_level": "fact_documentary",
+                    **source,
+                }
+                ranked.append((score, item))
+        ranked.sort(
+            key=lambda pair: (
+                pair[0],
+                pair[1].get("event_year_start") is not None,
+                -(pair[1].get("event_year_start") or 0),
+            ),
+            reverse=True,
+        )
+        items = [item for _, item in ranked[: self._limit(arguments)]]
+        if items:
+            return ToolResult(tool=tool, status="ok", items=items)
+        return ToolResult(tool=tool, status="no_data", message="本地可信历史来源中没有匹配记录。")
 
     def _mark_evidence_gap(self, arguments: dict[str, Any]) -> ToolResult:
         tool = "mark_evidence_gap"

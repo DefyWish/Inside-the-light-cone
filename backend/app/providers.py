@@ -49,8 +49,31 @@ class ClaimLink(BaseModel):
     note: str | None = None
 
 
+class CurationEventDraft(BaseModel):
+    event_id: str | None = None
+    subject_ids: list[str] = Field(default_factory=list)
+    title: str
+    summary: str
+    branch: str
+    event_type: str
+    event_year_start: int | None = None
+    event_year_end: int | None = None
+    date_text: str | None = None
+    time_precision: Literal["exact", "year", "range", "circa", "period", "unknown"] = "unknown"
+    historical_place: str | None = None
+    modern_place: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    place_precision: str | None = None
+    epistemic_status: Literal["fact", "view", "disputed", "gap"] = "fact"
+    source_ids: list[str] = Field(default_factory=list)
+    claim_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    movement: dict[str, Any] | None = None
+
+
 class AgentAction(BaseModel):
-    type: Literal["tool_call", "narration", "finish", "claim", "plan"]
+    type: Literal["tool_call", "narration", "finish", "claim", "plan", "curation_event"]
     motivation: str | None = None
     tool: str | None = None
     arguments: dict[str, Any] = Field(default_factory=dict)
@@ -61,10 +84,11 @@ class AgentAction(BaseModel):
     claim: str | None = None
     claim_id: str | None = None
     status: Literal["open", "strengthened", "challenged", "dropped"] | None = None
-    evidence_level: Literal["fact_genomic", "fact_archaeology", "view_model"] | None = None
+    evidence_level: Literal["fact_genomic", "fact_archaeology", "fact_documentary", "view_model"] | None = None
     event_year_start: int | None = None
     event_year_end: int | None = None
     links: list[ClaimLink] = Field(default_factory=list)
+    event: CurationEventDraft | None = None
 
 
 @dataclass
@@ -74,6 +98,7 @@ class InvestigationState:
     claims: list[dict[str, Any]] = field(default_factory=list)
     relations: list[dict[str, Any]] = field(default_factory=list)
     lines: list[dict[str, Any]] = field(default_factory=list)
+    curation_events: list[dict[str, Any]] = field(default_factory=list)
     provider_cursor: int = 0
     provider_scenario: str | None = None
 
@@ -133,17 +158,19 @@ class OpenAICompatibleConfig:
     timeout_seconds: float = 90.0
 
 
-SYSTEM_PROMPT = """你是光锥之内的调查 Agent。每轮只输出一个动作。
+SYSTEM_PROMPT = """你是光锥之内的调查与策展 Agent。每轮只输出一个动作。
 动作使用 provider-neutral JSON：
 1. 拆解计划：{"type":"plan","lines":["主线1","主线2","主线3","主线4"]} —— 调查早期必须先把问题拆成4-8条调查主线
 2. 调工具：{"type":"tool_call","motivation":"为什么查","tool":"工具名","arguments":{}}
-3. 形成判断：{"type":"claim","claim":"一个可被证据支撑的判断","line":"所属主线（与计划文字一致）","evidence_level":"fact_genomic|fact_archaeology|view_model","event_year_start":整数或null,"event_year_end":整数或null,"links":[{"target":"既有claim编号或证据名称","predicate":"supports|contradicts|kin|same_site|contemporaneous|part_of|derived_from","note":"可选"}]}
+3. 形成判断：{"type":"claim","claim":"一个可被证据支撑的判断","line":"所属主线（与计划文字一致）","evidence_level":"fact_genomic|fact_archaeology|fact_documentary|view_model","event_year_start":整数或null,"event_year_end":整数或null,"links":[{"target":"既有claim编号或证据名称","predicate":"supports|contradicts|kin|same_site|contemporaneous|part_of|derived_from","note":"可选"}]}
 4. 主线了断：{"type":"plan","line_status":[{"line":"主线文字","status":"covered|gap","note":"简述"}]} —— covered 表示该线已有带外部证据的claim，gap 表示该线确无证据
-5. 纪录片旁白：{"type":"narration","text":"第三人称、带证据边界的叙述"}
-6. 收束：{"type":"finish","text":"本轮总结"}
+5. 生成策展节点：{"type":"curation_event","event":{"title":"短标题","summary":"故事摘要","branch":"由本轮问题动态形成的主题枝","event_type":"迁徙|任职|作品|思想|战争|亲缘|考古|文献|影响|争议|其他","subject_ids":["对象名或权威ID"],"event_year_start":整数或null,"event_year_end":整数或null,"date_text":"原始年代文字或null","time_precision":"exact|year|range|circa|period|unknown","historical_place":"历史地名或null","modern_place":"现代地名或null","latitude":数字或null,"longitude":数字或null,"place_precision":"地点精度说明或null","epistemic_status":"fact|view|disputed|gap","source_ids":["来源ID"],"claim_ids":["c1"],"evidence_ids":["证据ID"],"movement":{"kind":"赴任|贬谪|迁居|征战|其他","from":{"name":"地点","latitude":数字,"longitude":数字},"to":{"name":"地点","latitude":数字,"longitude":数字}}或null}}
+6. 纪录片旁白：{"type":"narration","text":"第三人称、带证据边界的叙述"}
+7. 收束：{"type":"finish","text":"本轮总结"}
 只输出一个 JSON 对象，不要 Markdown。
 工作方式：先拆解，再逐线调查。收束的硬条件：每一条主线都必须了断（covered 或 gap），少一条都会被驳回。单条主线的漂亮叙事不是情报，是摘要。
 claim 是情报网的节点：每条 claim 必须属于一条主线，并尽量与**其他主线的** claim 连线——跨线的 supports/contradicts/derived_from 才是网络，同线串联只是目录。
+curation_event 是地图、生命树、时间轴共享的投影节点。它必须来自本轮实际检索到的证据或 claim，引用 source_ids、claim_ids、evidence_ids 中至少一种；不得按人物姓名套用预设路线、预设故事或固定分支。branch 依据用户问题与本轮计划动态命名。同一资料在不同问题下可以生成不同的节点与分支。只有证据明确支持真实位移时才填写 movement；带坐标的普通事件只落点，不连成迁徙线。后世影响沿时间轴继续展开。年代或地点未知时保留 unknown/gap，禁止补造。
 医药/科技类问题的候选主线（按问题裁剪，不必全用）：发现史、机制证据、专利谱系、公司交易与资本、临床项目与入组策略、生物标志物、失败机制（同一失败的不同机构解释必须并列）、监管事件、竞争格局、未被开发的机会。
 历史/考古类问题的候选主线：文献记载、考古证据、古基因组证据、地名沿革、争议与反方。
 同一事件的不同主体（药企、监管、学界、投资者）给出的矛盾解释是最高价值证据，必须分别成 claim 并以 contradicts 相连。
@@ -256,7 +283,7 @@ class OpenAICompatibleLLM(LLMProvider):
                                 },
                                 "evidence_level": {
                                     "type": "string",
-                                    "enum": ["fact_genomic", "fact_archaeology", "view_model"],
+                                    "enum": ["fact_genomic", "fact_archaeology", "fact_documentary", "view_model"],
                                 },
                                 "event_year_start": {"type": ["integer", "null"]},
                                 "event_year_end": {"type": ["integer", "null"]},
@@ -282,6 +309,46 @@ class OpenAICompatibleLLM(LLMProvider):
                                 "motivation": {"type": "string"},
                             },
                             "required": [],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "record_curation_event",
+                        "description": "把已检索证据与判断投影成地图、生命树和时间轴共享的策展节点。主题枝由当前问题动态产生。",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "event": {
+                                    "type": "object",
+                                    "properties": {
+                                        "event_id": {"type": "string"},
+                                        "subject_ids": {"type": "array", "items": {"type": "string"}},
+                                        "title": {"type": "string"},
+                                        "summary": {"type": "string"},
+                                        "branch": {"type": "string"},
+                                        "event_type": {"type": "string"},
+                                        "event_year_start": {"type": ["integer", "null"]},
+                                        "event_year_end": {"type": ["integer", "null"]},
+                                        "date_text": {"type": ["string", "null"]},
+                                        "time_precision": {"type": "string", "enum": ["exact", "year", "range", "circa", "period", "unknown"]},
+                                        "historical_place": {"type": ["string", "null"]},
+                                        "modern_place": {"type": ["string", "null"]},
+                                        "latitude": {"type": ["number", "null"]},
+                                        "longitude": {"type": ["number", "null"]},
+                                        "place_precision": {"type": ["string", "null"]},
+                                        "epistemic_status": {"type": "string", "enum": ["fact", "view", "disputed", "gap"]},
+                                        "source_ids": {"type": "array", "items": {"type": "string"}},
+                                        "claim_ids": {"type": "array", "items": {"type": "string"}},
+                                        "evidence_ids": {"type": "array", "items": {"type": "string"}},
+                                        "movement": {"type": ["object", "null"]}
+                                    },
+                                    "required": ["title", "summary", "branch", "event_type", "subject_ids", "time_precision", "epistemic_status", "source_ids", "claim_ids", "evidence_ids"]
+                                }
+                            },
+                            "required": ["event"],
                             "additionalProperties": False,
                         },
                     },
@@ -357,6 +424,7 @@ class OpenAICompatibleLLM(LLMProvider):
                     f"调查主线及其状态：{lines_text}\n"
                     f"已形成的 claim：{json.dumps([{'id': c['claim_id'], 'line': c.get('line'), 'status': c.get('status'), 'text': c['text'][:40]} for c in state.claims[-10:]], ensure_ascii=False)}\n"
                     f"已形成的关系数：{len(state.relations)}\n"
+                    f"已生成的策展节点：{json.dumps([{'id': e['event_id'], 'branch': e['branch'], 'title': e['title']} for e in state.curation_events[-12:]], ensure_ascii=False)}\n"
                     f"最近工具结果：{observations}\n"
                     "选择下一动作。"
                 ),
@@ -464,6 +532,8 @@ class OpenAICompatibleLLM(LLMProvider):
                     links=arguments.pop("links", []) or [],
                     motivation=str(arguments.pop("motivation", "")) or None,
                 )
+            if name == "record_curation_event":
+                return AgentAction(type="curation_event", event=arguments.get("event"))
             if name == "narrate_investigation":
                 return AgentAction(type="narration", text=str(arguments.get("text") or ""))
             if name == "finish_investigation":

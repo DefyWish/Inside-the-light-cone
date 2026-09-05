@@ -59,9 +59,21 @@ ALIASES_PATH = Path(
         PROJECT_ROOT / "data/aliases.json",
     )
 )
+CURATION_DIR = Path(
+    os.getenv(
+        "LIGHTCONE_CURATION_DIR",
+        PROJECT_ROOT / "data/curation",
+    )
+)
 
 app = FastAPI(title="光锥之内 API", version="0.5.0")
-evidence_tools = EvidenceTools(CATALOG_PATH, NUMERIC_DIR, RESEARCH_STAGING_PATH, ALIASES_PATH)
+evidence_tools = EvidenceTools(
+    CATALOG_PATH,
+    NUMERIC_DIR,
+    RESEARCH_STAGING_PATH,
+    ALIASES_PATH,
+    CURATION_DIR,
+)
 research_provider = research_provider_from_environment(RESEARCH_CORPUS_PATH)
 research_agent = ResearchAgent(
     research_provider,
@@ -92,6 +104,7 @@ def health() -> dict[str, object]:
         "research_provider": research_provider.name,
         "research_corpus": RESEARCH_CORPUS_PATH.exists(),
         "research_staging": RESEARCH_STAGING_PATH.exists(),
+        "curated_sources": len(evidence_tools.curated_sources),
     }
 
 
