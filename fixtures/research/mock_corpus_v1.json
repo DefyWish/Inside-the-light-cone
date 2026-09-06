@@ -1,0 +1,32 @@
+{
+  "fixture_version": 1,
+  "entries": [
+    {
+      "match_contains": ["loschbour"],
+      "title": "Ancient human genomes suggest three ancestral populations for present-day Europeans",
+      "source_url": "https://doi.org/10.1038/nature13673",
+      "quote": "We sequenced the genomes of a ∼7,000-year-old farmer from Germany and eight ∼8,000-year-old hunter-gatherers from Luxembourg and Sweden.",
+      "summary": "论文摘要确认该研究测序了来自卢森堡和瑞典、距今约八千年的狩猎采集者基因组。",
+      "scope_note": "这条引文补充论文与样本的研究背景，不填补当前亲缘关系缺口。",
+      "source_id": "doi:10.1038/nature13673",
+      "provenance": {
+        "acquisition": "local_published_corpus",
+        "data_status": "published",
+        "retrieved_from": "Nature article page",
+        "retrieved_at": "2026-08-31"
+      }
+    },
+    {
+      "match_contains": ["无引文测试"],
+      "title": "缺少引文的开发测试记录",
+      "source_url": "",
+      "quote": "",
+      "summary": "此记录只用于验证拒收门槛。",
+      "source_id": "fixture:research:rejected",
+      "provenance": {
+        "acquisition": "fixture",
+        "data_status": "fixture"
+      }
+    }
+  ]
+}

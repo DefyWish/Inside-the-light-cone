@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "method": "linear coordinate alignment fitted on modern references only",
+  "reference_samples": 256,
+  "projection_samples": 64,
+  "snps": 20000,
+  "smartpca": {
+    "eigensoft_version": "8.0.0",
+    "lsqproject": true,
+    "shrinkmode": false
+  },
+  "reference_r_squared": 0.9991700731141477,
+  "projection_r_squared": 0.9999734713744117,
+  "reference_pairwise_distance_correlation": 0.999275384253962,
+  "projection_pairwise_distance_correlation": 0.9999995103522092,
+  "aligned_component_correlations_all_samples": [
+    0.9987925573466684,
+    0.9998666973413919,
+    0.9992672027491963,
+    0.9999123219853908,
+    0.9998512086453897,
+    0.9999626031020981
+  ]
+}
