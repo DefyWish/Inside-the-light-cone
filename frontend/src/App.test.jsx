@@ -2,7 +2,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import App, { apiErrorMessage, buildInvestigationLog, buildStoryline, isVisualCurationCandidate, projectCurationEvents } from "./App.jsx";
+import App, { apiErrorMessage, buildInvestigationLog, buildStoryline, InvestigationHistory, isVisualCurationCandidate, projectCurationEvents } from "./App.jsx";
 import CurationMap, { hasPoint } from "./CurationMap.jsx";
 import InvestigationReport from "./InvestigationReport.jsx";
 import Timeline from "./Timeline.jsx";
@@ -85,6 +85,14 @@ describe("history curation application shell", () => {
     expect(html).toContain("专业版");
     expect(html).toContain("科普版");
     expect(html).toContain("客家调查报告");
+  });
+
+  it("renders an independent delete control for every history entry", () => {
+    const history = [{ investigation_id: "i1", question: "测试调查", status: "completed", event_count: 12 }];
+    const html = renderToStaticMarkup(<InvestigationHistory history={history} activeId="i1" onOpen={() => {}} onDelete={() => {}} />);
+    expect(html).toContain("删除 测试调查");
+    expect(html).toContain("history-delete");
+    expect(html).toContain("测试调查");
   });
 
   it("rejects missing coordinates instead of projecting them to zero", () => {

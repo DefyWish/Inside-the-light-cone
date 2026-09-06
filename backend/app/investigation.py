@@ -151,6 +151,25 @@ class ClaimStore:
             )
             self._upsert_session(connection, session)
 
+    def delete_investigation(self, investigation_id: str) -> None:
+        with sqlite3.connect(self.path) as connection:
+            connection.execute(
+                "DELETE FROM investigation_events WHERE investigation_id = ?",
+                (investigation_id,),
+            )
+            connection.execute(
+                "DELETE FROM relations WHERE investigation_id = ?",
+                (investigation_id,),
+            )
+            connection.execute(
+                "DELETE FROM claims WHERE investigation_id = ?",
+                (investigation_id,),
+            )
+            connection.execute(
+                "DELETE FROM investigations WHERE investigation_id = ?",
+                (investigation_id,),
+            )
+
     def load_sessions(self) -> list[InvestigationSession]:
         with sqlite3.connect(self.path) as connection:
             connection.row_factory = sqlite3.Row
@@ -402,6 +421,18 @@ class InvestigationManager:
             task.cancel()
         await session.finish()
         return StopAccepted(investigation_id=investigation_id, mode="stopped")
+
+    async def delete(self, investigation_id: str) -> bool:
+        if investigation_id not in self.sessions:
+            return False
+        task = self.tasks.pop(investigation_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self.sessions.pop(investigation_id, None)
+        if self.claim_store is not None:
+            self.claim_store.delete_investigation(investigation_id)
+        return True
 
     async def redirect(self, investigation_id: str, direction: str) -> RedirectAccepted | None:
         session = self.get(investigation_id)

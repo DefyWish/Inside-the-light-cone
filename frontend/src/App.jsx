@@ -107,6 +107,10 @@ export function projectCurationEvents(events) {
   return [...projected.values()].sort((a, b) => (a.event_year_start ?? Infinity) - (b.event_year_start ?? Infinity));
 }
 
+export function InvestigationHistory({ history, activeId, onOpen, onDelete }) {
+  return <details className="history-menu"><summary>检索历史 · {history.length}</summary><div>{history.map((item) => <div key={item.investigation_id} className={`history-entry ${item.investigation_id === activeId ? "active" : ""}`}><button type="button" className="history-open" onClick={() => onOpen(item)}><b>{item.question}</b><small>{STATES[item.status] || item.status} · {item.event_count}</small></button><button type="button" className="history-delete" title="删除这条检索" aria-label={`删除 ${item.question}`} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onDelete(item); }}>×</button></div>)}</div></details>;
+}
+
 export default function App() {
   const [draft, setDraft] = useState("");
   const [question, setQuestion] = useState("");
@@ -210,6 +214,21 @@ export default function App() {
     setId(item.investigation_id); setQuestion(item.question); connect(item.investigation_id, 0, true);
   }
 
+  async function deleteHistory(item) {
+    try {
+      const response = await fetch(`/api/investigations/${item.investigation_id}`, { method: "DELETE" });
+      if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(apiErrorMessage(error, response.status)); }
+      const remaining = history.filter((entry) => entry.investigation_id !== item.investigation_id);
+      setHistory(remaining); setNotice("");
+      if (item.investigation_id !== id) return;
+      sourceRef.current?.close(); setEvents([]); setSelected(null); setReport(null); lastRef.current = 0;
+      if (remaining.length > 0) openHistory(remaining[0]);
+      else { setId(null); setQuestion(""); setStatus("idle"); }
+    } catch (error) {
+      setNotice(error.message);
+    }
+  }
+
   function changeTimeline(year) {
     setCursorYear(year);
     const nearest = timelineEvents.filter((event) => event.event_year_start == null || event.event_year_start <= year).at(-1);
@@ -217,7 +236,7 @@ export default function App() {
   }
 
   return <main className="curation-shell">
-    <header><strong>光锥之内</strong><span>历史策展 Agent</span><details className="history-menu"><summary>检索历史 · {history.length}</summary><div>{history.map((item) => <button type="button" key={item.investigation_id} className={item.investigation_id === id ? "active" : ""} onClick={() => openHistory(item)}><b>{item.question}</b><small>{STATES[item.status] || item.status} · {item.event_count}</small></button>)}</div></details><i>{STATES[status]}</i></header>
+    <header><strong>光锥之内</strong><span>历史策展 Agent</span><InvestigationHistory history={history} activeId={id} onOpen={openHistory} onDelete={deleteHistory} /><i>{STATES[status]}</i></header>
     <form className="curation-query" onSubmit={submit}><input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="问一个人物、家族、族群或遗址" aria-label="调查问题" /><button>新调查</button>{id && <button type="button" onClick={follow}>继续追问</button>}{status === "running" && <button type="button" onClick={stop}>停止</button>}</form>
     <section className="agent-ribbon"><b>{STATES[agent?.state] || STATES[status]}</b><span>{agent?.message || "Agent 将自行规划来源与主题枝"}</span>{agent?.active_line && <em>{agent.active_line}</em>}</section>
     {notice && <div className="query-notice">{notice}</div>}

@@ -71,6 +71,27 @@ class InvestigationLoopTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(events[0]["type"], "investigation.started")
             self.assertEqual(events[-1]["type"], "investigation.completed")
 
+    async def test_deleted_session_is_removed_from_memory_and_sqlite(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            store = ClaimStore(Path(temporary_directory) / "investigations.sqlite")
+            manager = InvestigationManager(
+                self.manager.provider,
+                self.manager.evidence_tools,
+                claim_store=store,
+            )
+            session = await manager.create("苏轼迁徙")
+            _ = [event async for event in session.stream()]
+
+            self.assertTrue(await manager.delete(session.id))
+            self.assertIsNone(manager.get(session.id))
+
+            restored = InvestigationManager(
+                self.manager.provider,
+                self.manager.evidence_tools,
+                claim_store=ClaimStore(store.path),
+            )
+            self.assertEqual(restored.list_sessions(), [])
+
     async def test_builds_professional_and_public_reports_from_dynamic_state(self) -> None:
         session = await self.manager.create("Loschbour")
         _ = [event async for event in session.stream()]

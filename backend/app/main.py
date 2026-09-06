@@ -19,7 +19,7 @@ from .investigation import (
     encode_sse,
 )
 from .providers import MockLLM, provider_from_environment
-from .query_filter import screen_question
+from .query_filter import assess_question, semantic_classifier_from_environment
 from .reports import Audience, build_investigation_report
 from .research_agent import (
     ResearchAgent,
@@ -83,6 +83,7 @@ research_agent = ResearchAgent(
 )
 claim_store = ClaimStore(CLAIM_STORE_PATH)
 runtime_provider = provider_from_environment(FIXTURE_PATH, TOOL_DEFINITIONS)
+query_classifier = semantic_classifier_from_environment()
 investigations = InvestigationManager(runtime_provider, evidence_tools, research_agent, claim_store=claim_store)
 replays = InvestigationManager(
     MockLLM(FIXTURE_PATH),
@@ -93,8 +94,8 @@ replays = InvestigationManager(
 )
 
 
-def enforce_query_scope(question: str, *, context: str | None = None) -> None:
-    decision = screen_question(question, context=context)
+async def enforce_query_scope(question: str, *, context: str | None = None) -> None:
+    decision = await assess_question(question, context=context, classifier=query_classifier)
     if decision.allowed:
         return
     raise HTTPException(
@@ -127,6 +128,7 @@ def health() -> dict[str, object]:
         "research_corpus": RESEARCH_CORPUS_PATH.exists(),
         "research_staging": RESEARCH_STAGING_PATH.exists(),
         "curated_sources": len(evidence_tools.curated_sources),
+        "query_gate": query_classifier.name if query_classifier is not None else "local-rules",
     }
 
 
@@ -144,7 +146,7 @@ def call_tool(tool_name: str, call: ToolCall) -> ToolResult:
 async def create_investigation(request: InvestigationRequest) -> InvestigationCreated:
     if investigations.is_stop_command(request.question):
         raise HTTPException(status_code=422, detail="当前没有可停止的调查")
-    enforce_query_scope(request.question)
+    await enforce_query_scope(request.question)
     session = await investigations.create(request.question)
     return InvestigationCreated(
         investigation_id=session.id,
@@ -157,8 +159,17 @@ def list_investigations() -> list[InvestigationSummary]:
     return investigations.list_sessions()
 
 
+@app.delete("/api/investigations/{investigation_id}")
+async def delete_investigation(investigation_id: str) -> dict[str, object]:
+    manager = manager_for(investigation_id)
+    if manager is None or not await manager.delete(investigation_id):
+        raise HTTPException(status_code=404, detail="investigation not found")
+    return {"investigation_id": investigation_id, "deleted": True}
+
+
 @app.post("/api/replays", response_model=InvestigationCreated)
 async def create_replay(request: InvestigationRequest) -> InvestigationCreated:
+    await enforce_query_scope(request.question)
     session = await replays.create(request.question)
     return InvestigationCreated(
         investigation_id=session.id,
@@ -179,7 +190,7 @@ async def redirect_investigation(
         raise HTTPException(status_code=404, detail="investigation not found")
     session = manager.get(investigation_id)
     if not manager.is_stop_command(request.direction):
-        enforce_query_scope(
+        await enforce_query_scope(
             request.direction,
             context=session.state.question if session is not None else None,
         )
