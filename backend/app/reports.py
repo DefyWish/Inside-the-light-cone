@@ -1,19 +1,12 @@
 from __future__ import annotations
 
-from collections import defaultdict
+import re
 from typing import Any, Literal
 
 from .investigation import InvestigationSession
 
 
 Audience = Literal["professional", "public"]
-
-LEVEL_LABELS = {
-    "fact_genomic": "古基因组事实",
-    "fact_archaeology": "考古事实",
-    "fact_documentary": "文献事实",
-    "view_model": "研究观点",
-}
 
 SOURCE_LABELS = {
     "primary_chronicle": "史传",
@@ -48,18 +41,38 @@ def _unique_evidence(session: InvestigationSession) -> list[dict[str, Any]]:
     return list(evidence.values())
 
 
-def _final_summary(session: InvestigationSession) -> str:
+def _completed_data(session: InvestigationSession) -> dict[str, Any]:
     for event in reversed(session.events):
         if event["type"] == "investigation.completed":
-            return str(event["data"].get("summary") or "调查已经完成。")
-    return "调查已经完成。"
+            return event["data"]
+    return {}
 
 
-def _shorten(text: str, limit: int = 260) -> str:
-    compact = " ".join(text.split())
-    if len(compact) <= limit:
-        return compact
-    return compact[: limit - 1].rstrip("，。；：") + "…"
+def _paragraphs(text: str) -> list[str]:
+    return [paragraph.strip() for paragraph in re.split(r"\n\s*\n", text) if paragraph.strip()]
+
+
+def _is_substantial(text: str | None) -> bool:
+    if not text or len(text.strip()) < 180:
+        return False
+    return not any(marker in text for marker in ("达到本轮步数上限", "调查已经完成", "调查完成。"))
+
+
+def _sentence(text: str) -> str:
+    compact = " ".join(str(text or "").split()).strip()
+    if compact and compact[-1] not in "。！？；":
+        compact += "。"
+    return compact
+
+
+def _subject_name(session: InvestigationSession) -> str:
+    for event in session.state.curation_events:
+        for subject in event.get("subject_ids", []):
+            name = str(subject).strip()
+            if name and ":" not in name and not name.isdigit():
+                return name
+    question = session.question.strip("？?。 ")
+    return question[:28] + ("…" if len(question) > 28 else "")
 
 
 def _source_rows(evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -80,90 +93,164 @@ def _source_rows(evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
-def _professional_sections(session: InvestigationSession, summary: str) -> list[dict[str, Any]]:
-    claims_by_line: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for claim in session.state.claims:
-        claims_by_line[str(claim.get("line") or "综合判断")].append(claim)
-
-    sections: list[dict[str, Any]] = [
-        {
-            "heading": "调查摘要",
-            "paragraphs": [paragraph.strip() for paragraph in summary.split("\n\n") if paragraph.strip()],
-            "items": [],
-        }
-    ]
-    ordered_lines = [line.get("line") for line in session.state.lines if line.get("line")]
-    for line in [*ordered_lines, *claims_by_line.keys()]:
-        if not line or not claims_by_line.get(line):
-            continue
-        if any(section["heading"] == line for section in sections):
-            continue
-        sections.append(
-            {
-                "heading": line,
-                "paragraphs": [],
-                "items": [
-                    {
-                        "title": LEVEL_LABELS.get(claim.get("evidence_level"), "调查判断"),
-                        "text": claim.get("text") or "",
-                        "status": claim.get("status") or "open",
-                    }
-                    for claim in claims_by_line[line]
-                ],
-            }
-        )
-    return sections
-
-
-def _public_sections(session: InvestigationSession, summary: str) -> list[dict[str, Any]]:
-    events_by_branch: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for event in sorted(
-        session.state.curation_events,
-        key=lambda item: item.get("event_year_start") if item.get("event_year_start") is not None else 10**9,
-    ):
-        if event.get("epistemic_status") == "gap":
-            continue
-        events_by_branch[str(event.get("branch") or "故事主线")].append(event)
-
-    sections = []
-    for branch, events in events_by_branch.items():
-        sections.append(
-            {
-                "heading": branch,
-                "paragraphs": [],
-                "items": [
-                    {"title": event.get("title") or "故事节点", "text": _shorten(event.get("summary") or "")}
-                    for event in events
-                ],
-            }
-        )
-    if not sections:
-        paragraphs = [paragraph.strip() for paragraph in summary.split("\n\n") if paragraph.strip()]
-        sections.append(
-            {
-                "heading": "故事脉络",
-                "paragraphs": [_shorten(paragraph, 320) for paragraph in paragraphs[:6]],
-                "items": [],
-            }
-        )
-
-    boundary_claims = [
+def _claim_paragraphs(session: InvestigationSession) -> list[str]:
+    claims = [
         claim for claim in session.state.claims
-        if claim.get("status") in {"challenged", "dropped"}
-        or any(term in str(claim.get("text") or "") for term in ("没有任何", "不能直接", "不直接等同", "缺乏", "证据边界"))
+        if claim.get("status") != "dropped" and claim.get("text")
     ]
-    if boundary_claims:
-        sections.append(
+    claims.sort(
+        key=lambda claim: (
+            claim.get("event_year_start") is None,
+            claim.get("event_year_start") or 0,
+        )
+    )
+    paragraphs: list[str] = []
+    for index in range(0, len(claims), 2):
+        pair = claims[index:index + 2]
+        first = _sentence(pair[0]["text"])
+        if len(pair) == 1:
+            paragraphs.append(first)
+            continue
+        paragraphs.append(f"{first}与这一进程相连，{_sentence(pair[1]['text'])}")
+    return paragraphs
+
+
+def _professional_narrative(session: InvestigationSession, summary: str) -> list[str]:
+    if _is_substantial(summary):
+        return _paragraphs(summary)
+    paragraphs = _claim_paragraphs(session)
+    if paragraphs:
+        return paragraphs
+    return ["现有材料尚不足以形成一篇可核验的综合论述，调查已保留证据缺口，等待继续补证。"]
+
+
+def _date_label(year: int | None) -> str:
+    if year is None:
+        return "此后"
+    if year < 0:
+        return f"公元前{abs(year)}年左右"
+    return f"{year}年"
+
+
+def _public_excerpt(text: str, limit: int = 280) -> str:
+    compact = " ".join(str(text or "").split())
+    compact = compact.replace("现代分子人类学证据", "DNA留下的线索")
+    compact = compact.replace("Y染色体/Y-STR", "父系遗传标记")
+    compact = compact.replace("Y染色体", "父系遗传标记")
+    compact = compact.replace("Y-STR", "父系遗传标记")
+    compact = compact.replace("线粒体DNA", "母系遗传标记")
+    compact = compact.replace("mtDNA", "母系遗传标记")
+    if len(compact) <= limit:
+        return _sentence(compact)
+    clipped = compact[:limit]
+    sentence_end = max(clipped.rfind(mark) for mark in "。！？")
+    if sentence_end >= limit // 2:
+        return clipped[:sentence_end + 1]
+    clause_end = max(clipped.rfind(mark) for mark in "；，")
+    if clause_end >= limit // 2:
+        return clipped[:clause_end].rstrip("，；") + "。"
+    return clipped.rstrip("，；：") + "……"
+
+
+def _remove_repeated_date(text: str, year: int | None) -> str:
+    if year is None:
+        return text
+    return re.sub(
+        rf"^(?:约|大约)?{abs(year)}(?:\s*[—–-]\s*\d+)?\s*年(?:左右)?[，、：:]?",
+        "",
+        text,
+    ).lstrip()
+
+
+def _public_moments(session: InvestigationSession) -> list[dict[str, Any]]:
+    moments: list[dict[str, Any]] = []
+    covered_claims: set[str] = set()
+    for event in session.state.curation_events:
+        if event.get("epistemic_status") == "gap" or not event.get("summary"):
+            continue
+        covered_claims.update(str(claim_id) for claim_id in event.get("claim_ids", []))
+        moments.append(
             {
-                "heading": "还不能确定的部分",
-                "paragraphs": [],
-                "items": [
-                    {"title": "证据边界", "text": _shorten(claim.get("text") or "", 230)}
-                    for claim in boundary_claims[:4]
-                ],
+                "year": event.get("event_year_start"),
+                "place": event.get("historical_place") or event.get("modern_place"),
+                "text": event.get("summary"),
             }
         )
-    return sections
+    for claim in session.state.claims:
+        line = str(claim.get("line") or "")
+        if (
+            claim.get("claim_id") in covered_claims
+            or claim.get("status") == "dropped"
+            or not claim.get("text")
+            or any(marker in line for marker in ("文献记载", "史传证据"))
+        ):
+            continue
+        moments.append(
+            {
+                "year": claim.get("event_year_start"),
+                "place": None,
+                "text": claim.get("text"),
+            }
+        )
+    moments.sort(key=lambda item: (item["year"] is None, item["year"] or 0))
+    return moments
+
+
+def _public_narrative(
+    session: InvestigationSession,
+    summary: str,
+    public_summary: str | None,
+) -> list[str]:
+    if _is_substantial(public_summary):
+        return _paragraphs(public_summary or "")
+
+    moments = _public_moments(session)
+    if not moments:
+        if _is_substantial(summary):
+            return _paragraphs(summary)
+        return ["这段历史仍在等待更多材料进入展厅。"]
+
+    subject = _subject_name(session)
+    first_event = next(
+        (
+            event for event in session.state.curation_events
+            if event.get("epistemic_status") != "gap" and event.get("summary")
+        ),
+        None,
+    )
+    first = (
+        {
+            "year": first_event.get("event_year_start"),
+            "place": first_event.get("historical_place") or first_event.get("modern_place"),
+            "text": first_event.get("summary"),
+        }
+        if first_event
+        else moments[0]
+    )
+    moments = [moment for moment in moments if moment != first]
+    opening_place = f"从{first['place']}" if first.get("place") else "从时间轴的起点"
+    paragraphs = [
+        f"如果把{subject}的历史铺成一张地图，故事会{opening_place}展开。{_public_excerpt(first['text'])}"
+    ]
+    for index in range(0, len(moments), 2):
+        group = moments[index:index + 2]
+        parts: list[str] = []
+        for offset, moment in enumerate(group):
+            lead = _date_label(moment.get("year"))
+            if moment.get("place"):
+                lead += f"，镜头来到{moment['place']}"
+            elif offset:
+                lead = f"到了{lead}"
+            moment_text = _remove_repeated_date(str(moment["text"]), moment.get("year"))
+            parts.append(f"{lead}，{_public_excerpt(moment_text)}")
+        paragraphs.append("".join(parts))
+
+    summary_paragraphs = _paragraphs(summary) if _is_substantial(summary) else []
+    if summary_paragraphs:
+        closing = summary_paragraphs[-1]
+        if closing not in paragraphs[-1]:
+            paragraphs.append(closing)
+    return paragraphs
 
 
 def build_investigation_report(
@@ -171,25 +258,23 @@ def build_investigation_report(
     audience: Audience = "professional",
 ) -> dict[str, Any]:
     evidence = _unique_evidence(session)
-    summary = _final_summary(session)
+    completed = _completed_data(session)
+    summary = str(completed.get("summary") or "")
+    public_summary = completed.get("public_summary")
     professional = audience == "professional"
+    subject = _subject_name(session)
+    narrative = (
+        _professional_narrative(session, summary)
+        if professional
+        else _public_narrative(session, summary, public_summary)
+    )
     return {
         "investigation_id": session.id,
         "audience": audience,
-        "title": f"{session.question}：调查报告",
+        "title": f"{subject}｜综合调查" if professional else f"{subject}｜展厅叙事",
         "subtitle": "专业历史文博版" if professional else "博物馆公众版",
-        "overview": (
-            f"本报告由本次调查形成的 {len(session.state.lines)} 条主线、"
-            f"{len(session.state.claims)} 项判断、{len(session.state.curation_events)} 个策展节点和"
-            f" {len(evidence)} 条去重证据整理而成。"
-            if professional
-            else "沿着地图、时间轴和生命树，我们把这次调查里最重要的故事节点依次展开。"
-        ),
-        "sections": (
-            _professional_sections(session, summary)
-            if professional
-            else _public_sections(session, summary)
-        ),
+        "overview": "一篇由时间、空间与多尺度证据共同推进的综合论述。" if professional else "沿着地图与生命树，进入这段仍在生长的历史。",
+        "narrative": narrative,
         "sources": _source_rows(evidence),
         "stats": {
             "lines": len(session.state.lines),

@@ -78,6 +78,7 @@ class AgentAction(BaseModel):
     tool: str | None = None
     arguments: dict[str, Any] = Field(default_factory=dict)
     text: str | None = None
+    public_text: str | None = None
     lines: list[str] = Field(default_factory=list)
     line_status: list[dict[str, Any]] = Field(default_factory=list)
     line: str | None = None
@@ -166,7 +167,7 @@ SYSTEM_PROMPT = """你是光锥之内的调查与策展 Agent。每轮只输出�
 4. 主线了断：{"type":"plan","line_status":[{"line":"主线文字","status":"covered|gap","note":"简述"}]} —— covered 表示该线已有带外部证据的claim，gap 表示该线确无证据
 5. 生成策展节点：{"type":"curation_event","event":{"title":"短标题","summary":"故事摘要","branch":"由本轮问题动态形成的主题枝","event_type":"迁徙|任职|作品|思想|战争|亲缘|考古|文献|影响|争议|其他","subject_ids":["对象名或权威ID"],"event_year_start":整数或null,"event_year_end":整数或null,"date_text":"原始年代文字或null","time_precision":"exact|year|range|circa|period|unknown","historical_place":"历史地名或null","modern_place":"现代地名或null","latitude":数字或null,"longitude":数字或null,"place_precision":"地点精度说明或null","epistemic_status":"fact|view|disputed|gap","source_ids":["来源ID"],"claim_ids":["c1"],"evidence_ids":["证据ID"],"movement":{"kind":"赴任|贬谪|迁居|征战|其他","from":{"name":"地点","latitude":数字,"longitude":数字},"to":{"name":"地点","latitude":数字,"longitude":数字}}或null}}
 6. 纪录片旁白：{"type":"narration","text":"第三人称、带证据边界的叙述"}
-7. 收束：{"type":"finish","text":"本轮总结"}
+7. 收束：{"type":"finish","text":"面向历史文博研究者的完整综合论述","public_text":"面向博物馆观众的完整展厅叙事"}
 只输出一个 JSON 对象，不要 Markdown。
 工作方式：先拆解，再逐线调查。收束的硬条件：每一条主线都必须了断（covered 或 gap），少一条都会被驳回。单条主线的漂亮叙事不是情报，是摘要。
 证据检索采用本地优先：先查询 search_curated_sources、search_literature 与本地 AADR 工具，充分复用策展主题包和 research_staging 既有成果；本地返回 no_data、unknown_place 或明确证据缺口后，再等待研究 Agent 联网补证。不得为了重复确认本地已有材料而反复外派。
@@ -182,7 +183,7 @@ claim 带明暗状态：新生成时 status=open（暗线/待证）；证据充�
 按地点扩大古样本范围时，必须忠于用户明确提出的空间与时间范围；用户没有要求时，不得擅自从历史时期扩展到史前时期。
 研究 Agent 的 pending 表示联网搜索仍在进行，此时不得用无关的宽泛查询填补等待时间。
 停止、终止、退出等控制指令不属于调查对象。无数据是正常结果；不得编造人物、关系、年代、引文、身份、血缘或成分百分比。古基因组事实、考古事实和研究模型必须保持原有证据层级。
-收束文本要形成连续叙事：从问题的历史起点进入，说明各主线上的关键事件、证据转折、跨线的连接与矛盾，最后落到仍未解决的缺口。不要逐条复述链接标题。"""
+收束时同时写两篇可独立阅读的完整文案。text 是专业版：提出中心判断，按历史进程组织材料，把文献、考古、遗传、空间与争议证据写进同一条论证链，最后给出结论与证据边界；不要按调查主线分节，不要罗列 claim，不要汇报检索数量。public_text 是科普版：写成博物馆展厅开篇或结语，以人物、人群、地点和时间变化推动故事，保留关键事实和悬念，解释专业术语，避免论文摘要腔、证据卡片腔和来源清单。两版都使用连续段落，从历史起点进入，经过关键转折，落到后世影响或尚待回答的问题。不要逐条复述链接标题。"""
 
 
 class OpenAICompatibleLLM(LLMProvider):
@@ -370,11 +371,14 @@ class OpenAICompatibleLLM(LLMProvider):
                     "type": "function",
                     "function": {
                         "name": "finish_investigation",
-                        "description": "证据链已经形成或已明确留下缺口时，输出连续的最终叙事并结束调查。",
+                        "description": "证据链已经形成或已明确留下缺口时，同时输出专业综合论述与博物馆展厅叙事并结束调查。",
                         "parameters": {
                             "type": "object",
-                            "properties": {"text": {"type": "string"}},
-                            "required": ["text"],
+                            "properties": {
+                                "text": {"type": "string", "description": "专业版完整综合论述"},
+                                "public_text": {"type": "string", "description": "科普版完整展厅叙事"},
+                            },
+                            "required": ["text", "public_text"],
                             "additionalProperties": False,
                         },
                     },
@@ -537,7 +541,11 @@ class OpenAICompatibleLLM(LLMProvider):
             if name == "narrate_investigation":
                 return AgentAction(type="narration", text=str(arguments.get("text") or ""))
             if name == "finish_investigation":
-                return AgentAction(type="finish", text=str(arguments.get("text") or "调查完成。"))
+                return AgentAction(
+                    type="finish",
+                    text=str(arguments.get("text") or "调查完成。"),
+                    public_text=str(arguments.get("public_text") or "") or None,
+                )
             return AgentAction(
                 type="tool_call",
                 motivation=str(arguments.pop("motivation", "")) or None,

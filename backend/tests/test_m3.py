@@ -101,9 +101,15 @@ class InvestigationLoopTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(professional["subtitle"], "专业历史文博版")
         self.assertEqual(public["subtitle"], "博物馆公众版")
-        self.assertTrue(professional["sections"])
-        self.assertTrue(public["sections"])
+        self.assertTrue(professional["narrative"])
+        self.assertTrue(public["narrative"])
+        self.assertNotIn("sections", professional)
         self.assertGreaterEqual(professional["stats"]["evidence"], len(professional["sources"]))
+
+        public_copy = "从遗址走向展厅，这段故事沿时间与地点逐步展开。" * 12
+        session.events[-1]["data"]["public_summary"] = public_copy
+        regenerated = build_investigation_report(session, "public")
+        self.assertEqual(regenerated["narrative"], [public_copy])
 
 
 if __name__ == "__main__":

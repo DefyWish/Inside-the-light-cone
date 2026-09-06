@@ -978,6 +978,7 @@ class InvestigationManager:
                     "investigation.completed",
                     {
                         "summary": action.text or "调查完成。",
+                        "public_summary": action.public_text,
                         "steps": state.provider_cursor,
                         "scenario": state.provider_scenario,
                         "claims": len(state.claims),

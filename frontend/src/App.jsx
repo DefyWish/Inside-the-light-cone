@@ -4,11 +4,26 @@ import InvestigationReport from "./InvestigationReport.jsx";
 import LifeTree from "./LifeTree.jsx";
 import Timeline, { formatYear } from "./Timeline.jsx";
 import { formatHistoricalYear, historicalYearFor } from "./TreeCanvas.jsx";
+import { localizeField, localizePlace, localizePreferredPlace } from "./displayText.js";
 
 const TYPES = ["investigation.started", "investigation.redirected", "investigation.stopped", "agent.status", "agent.motivation", "tool.called", "tool.result", "evidence.added", "claim.added", "claim.updated", "relation.added", "plan.updated", "curation.event_added", "curation.event_updated", "research.dispatched", "research.returned", "research.no_data", "research.rejected", "narration", "investigation.continue_required", "investigation.completed", "investigation.failed"];
 const STATES = { idle: "待命", connecting: "连接", running: "调查", planning: "规划", investigating: "查证", researching: "补证", synthesizing: "策展", completed: "完成", stopped: "停止", failed: "中断" };
 const SOURCE_NAMES = { primary_chronicle: "史传", collected_works: "作品集", local_gazetteer: "方志", rare_book: "善本", memoir: "回忆录", ancient_genome_dataset: "古基因组", peer_reviewed_article: "论文", excavation_report: "发掘报告", official_database: "数据库", museum_catalog: "馆藏" };
 const STOP = new Set(["停止", "停止调查", "终止", "终止调查", "停下", "stop"]);
+
+function BrandMark() {
+  return (
+    <svg className="brand-mark" viewBox="0 0 100 90" aria-hidden="true">
+      <g fill="none" stroke="currentColor" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M5 9H94" />
+        <path d="M9 9L87 81" />
+        <path d="M49 10V47" />
+        <path d="M9 81H95" />
+      </g>
+      <path d="M5 9h10l-5 6zM42 9h14c-3 1-4 8-7 8s-4-7-7-8zM43 47h12l-6-6zM81 81h13l-6.5 6z" fill="currentColor" />
+    </svg>
+  );
+}
 
 export function apiErrorMessage(payload, status) {
   if (typeof payload?.detail === "string") return payload.detail;
@@ -73,9 +88,17 @@ function normalize(item, id) {
   const longitude = destinationLongitude ?? item.longitude ?? null;
   const coordinateBound = latitude != null && longitude != null;
   const rawHistoricalPlace = item.historical_place || item.place || item.site || item.political_entity || null;
-  const historicalPlace = destination?.name || (coordinateBound ? terminalPlace(rawHistoricalPlace) : rawHistoricalPlace);
-  const modernPlace = coordinateBound ? terminalPlace(item.modern_place) : (item.modern_place || null);
-  return { ...item, event_id: item.event_id || id, title: item.title || item.claim || item.summary || "节点", summary: item.summary || item.claim || item.note || item.title || "", branch: item.branch || SOURCE_NAMES[item.source_kind] || item.narrative_role || "证据线", event_type: item.event_type || item.narrative_role || item.record_type || "事件", event_year_start: year, event_year_end: item.event_year_end ?? year, historical_place: historicalPlace, modern_place: modernPlace, latitude, longitude, epistemic_status: item.epistemic_status || (item.evidence_level === "view_model" ? "view" : "fact"), source_ids: item.source_ids || (item.source_id ? [item.source_id] : []), claim_ids: item.claim_ids || [], evidence_ids: item.evidence_ids || (item.evidence_id ? [item.evidence_id] : []) };
+  const destinationPlace = destination?.name || null;
+  const historicalPlace = localizePreferredPlace(destinationPlace, coordinateBound ? terminalPlace(rawHistoricalPlace) : rawHistoricalPlace, item.modern_place);
+  const modernPlace = localizePlace(coordinateBound ? terminalPlace(item.modern_place) : item.modern_place);
+  const rawBranch = item.branch || SOURCE_NAMES[item.source_kind] || item.narrative_role || "证据线";
+  const rawEventType = item.event_type || item.narrative_role || item.record_type || "事件";
+  const movement = item.movement ? {
+    ...item.movement,
+    from: item.movement.from ? { ...item.movement.from, raw_name: item.movement.from.name, name: localizePlace(item.movement.from.name) } : item.movement.from,
+    to: item.movement.to ? { ...item.movement.to, raw_name: item.movement.to.name, name: localizePreferredPlace(item.movement.to.name, rawHistoricalPlace, item.modern_place) } : item.movement.to,
+  } : item.movement;
+  return { ...item, raw_historical_place: rawHistoricalPlace, raw_branch: rawBranch, raw_event_type: rawEventType, event_id: item.event_id || id, title: item.title || item.claim || item.summary || "节点", summary: item.summary || item.claim || item.note || item.title || "", branch: localizeField(rawBranch, "证据线"), event_type: localizeField(rawEventType, "事件"), event_year_start: year, event_year_end: item.event_year_end ?? year, historical_place: historicalPlace || null, modern_place: modernPlace || null, latitude, longitude, movement, epistemic_status: item.epistemic_status || (item.evidence_level === "view_model" ? "view" : "fact"), source_ids: item.source_ids || (item.source_id ? [item.source_id] : []), claim_ids: item.claim_ids || [], evidence_ids: item.evidence_ids || (item.evidence_id ? [item.evidence_id] : []) };
 }
 
 export function projectCurationEvents(events) {
@@ -130,7 +153,7 @@ export default function App() {
   const curated = useMemo(() => projectCurationEvents(events), [events]);
   const evidence = useMemo(() => [...new Map(events.filter((event) => event.type === "evidence.added").map((event) => [event.data.evidence.evidence_id || event.sequence, event.data.evidence])).values()], [events]);
   const timelineEvents = useMemo(() => curated.filter((event) => event.projection_kind !== "claim"), [curated]);
-  const lines = useMemo(() => [...events].reverse().find((event) => event.type === "plan.updated")?.data.lines || [], [events]);
+  const lines = useMemo(() => ([...events].reverse().find((event) => event.type === "plan.updated")?.data.lines || []).map((line) => ({ ...line, line: localizeField(line.line, "调查主线") })), [events]);
   const agent = useMemo(() => [...events].reverse().find((event) => event.type === "agent.status")?.data, [events]);
   const latestYear = timelineEvents.map((event) => event.event_year_start).filter((year) => year != null).at(-1);
   const active = curated.find((event) => event.event_id === selected) || timelineEvents.filter((event) => event.event_year_start == null || event.event_year_start <= cursorYear).at(-1);
@@ -236,7 +259,7 @@ export default function App() {
   }
 
   return <main className="curation-shell">
-    <header><strong>光锥之内</strong><span>历史策展 Agent</span><InvestigationHistory history={history} activeId={id} onOpen={openHistory} onDelete={deleteHistory} /><i>{STATES[status]}</i></header>
+    <header><div className="brand-lockup"><BrandMark /><strong>光锥之内</strong></div><InvestigationHistory history={history} activeId={id} onOpen={openHistory} onDelete={deleteHistory} /><i>{STATES[status]}</i></header>
     <form className="curation-query" onSubmit={submit}><input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="问一个人物、家族、族群或遗址" aria-label="调查问题" /><button>新调查</button>{id && <button type="button" onClick={follow}>继续追问</button>}{status === "running" && <button type="button" onClick={stop}>停止</button>}</form>
     <section className="agent-ribbon"><b>{STATES[agent?.state] || STATES[status]}</b><span>{agent?.message || "Agent 将自行规划来源与主题枝"}</span>{agent?.active_line && <em>{agent.active_line}</em>}</section>
     {notice && <div className="query-notice">{notice}</div>}

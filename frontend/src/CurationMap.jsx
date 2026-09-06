@@ -1,4 +1,5 @@
 import React from "react";
+import { localizePlace, localizePreferredPlace } from "./displayText.js";
 
 const WIDTH = 1600;
 const HEIGHT = 1000;
@@ -29,9 +30,82 @@ function movementPoint(value) {
 }
 
 function displayPlace(event) {
-  const raw = event.movement?.to?.name || event.historical_place || event.modern_place || event.title;
-  const parts = String(raw || "").split(/[／/→、]/).map((part) => part.trim()).filter(Boolean);
-  return parts.at(-1) || event.title;
+  return localizePreferredPlace(event.movement?.to?.name, event.historical_place, event.modern_place) || event.title;
+}
+
+const LABEL_OFFSETS = [
+  { x: 22, y: -17, anchor: "start" },
+  { x: 22, y: 31, anchor: "start" },
+  { x: -22, y: -17, anchor: "end" },
+  { x: -22, y: 31, anchor: "end" },
+  { x: 22, y: -49, anchor: "start" },
+  { x: -22, y: -49, anchor: "end" },
+  { x: 22, y: 61, anchor: "start" },
+  { x: -22, y: 61, anchor: "end" },
+  { x: 22, y: -81, anchor: "start" },
+  { x: -22, y: -81, anchor: "end" },
+  { x: 22, y: 93, anchor: "start" },
+  { x: -22, y: 93, anchor: "end" },
+  { x: 22, y: -113, anchor: "start" },
+  { x: -22, y: -113, anchor: "end" },
+  { x: 22, y: 125, anchor: "start" },
+  { x: -22, y: 125, anchor: "end" },
+  { x: 22, y: -145, anchor: "start" },
+  { x: -22, y: -145, anchor: "end" },
+  { x: 22, y: 157, anchor: "start" },
+  { x: -22, y: 157, anchor: "end" },
+];
+
+function labelBox(label, offset) {
+  const width = Math.min(330, Math.max(42, [...label.name].reduce(
+    (sum, character) => sum + (/^[\u3400-\u9fff]$/.test(character) ? 21 : 11),
+    0,
+  )));
+  const endX = label.x + offset.x;
+  return {
+    x1: offset.anchor === "end" ? endX - width : endX,
+    x2: offset.anchor === "end" ? endX : endX + width,
+    y1: label.y + offset.y - 22,
+    y2: label.y + offset.y + 6,
+  };
+}
+
+function boxesOverlap(a, b) {
+  return a.x1 < b.x2 + 8 && a.x2 + 8 > b.x1 && a.y1 < b.y2 + 5 && a.y2 + 5 > b.y1;
+}
+
+export function buildMapLabels(points, routes, selectedId) {
+  const candidates = [
+    ...points.map((event) => {
+      const point = projectChinaPoint(event.longitude, event.latitude);
+      return { ...point, name: displayPlace(event), eventId: event.event_id, active: event.event_id === selectedId, priority: 2 };
+    }),
+    ...routes.flatMap(({ event, start, end, progress, startName, endName }) => [
+      { ...start, name: startName, eventId: event.event_id, active: false, priority: 1 },
+      progress >= 1 ? { ...end, name: endName, eventId: event.event_id, active: event.event_id === selectedId, priority: 2 } : null,
+    ].filter(Boolean)),
+  ].filter((label) => label.name);
+
+  const unique = [];
+  candidates.forEach((candidate) => {
+    const index = unique.findIndex((label) => Math.hypot(label.x - candidate.x, label.y - candidate.y) < 12);
+    if (index < 0) unique.push(candidate);
+    else if (candidate.active || candidate.priority > unique[index].priority) unique[index] = candidate;
+  });
+
+  const occupied = [];
+  const laidOut = unique
+    .sort((a, b) => Number(b.active) - Number(a.active))
+    .map((label) => {
+      const offset = LABEL_OFFSETS.find((candidate) => {
+        const box = labelBox(label, candidate);
+        const inside = box.x1 >= 8 && box.x2 <= WIDTH - 8 && box.y1 >= 8 && box.y2 <= HEIGHT - 8;
+        return inside && !occupied.some((placed) => boxesOverlap(box, placed));
+      }) || LABEL_OFFSETS[0];
+      occupied.push(labelBox(label, offset));
+      return { ...label, offset };
+    });
+  return laidOut.sort((a, b) => Number(a.active) - Number(b.active));
 }
 
 export default function CurationMap({ events, cursorYear, selectedId, onSelect }) {
@@ -52,12 +126,13 @@ export default function CurationMap({ events, cursorYear, selectedId, onSelect }
       start,
       end,
       progress,
-      startName: event.movement?.from?.name || "起点",
-      endName: event.movement?.to?.name || displayPlace(event),
+      startName: localizePlace(event.movement?.from?.name) || "起点",
+      endName: localizePreferredPlace(event.movement?.to?.name, event.historical_place, event.modern_place) || displayPlace(event),
     }];
   });
   const movingIds = new Set(routes.filter(({ progress }) => progress < 1).map(({ event }) => event.event_id));
   const points = visible.filter((event) => hasPoint(event) && !movingIds.has(event.event_id));
+  const labels = buildMapLabels(points, routes, selectedId);
 
   return (
     <div className="map-wrap">
@@ -120,15 +195,25 @@ export default function CurationMap({ events, cursorYear, selectedId, onSelect }
               >
                 <circle className="map-point-ring" r={active ? 24 : 16} filter={active ? "url(#point-glow)" : undefined} />
                 <circle className="map-point-core" r={active ? 9 : 7} />
-                {active && (
-                  <text x="20" y="-18" className="map-point-label">
-                    {displayPlace(event)}
-                  </text>
-                )}
                 <title>{event.title}</title>
               </g>
             );
           })}
+        </g>
+        <g className="map-label-layer">
+          {labels.map((label) => (
+            <g
+              key={`label:${label.eventId}:${label.name}:${Math.round(label.x)}:${Math.round(label.y)}`}
+              className={label.active ? "map-place-label map-place-label-active" : "map-place-label"}
+              role="button"
+              tabIndex="0"
+              onClick={() => onSelect(label.eventId)}
+              onKeyDown={(keyboardEvent) => keyboardEvent.key === "Enter" && onSelect(label.eventId)}
+            >
+              <line x1={label.x} y1={label.y} x2={label.x + label.offset.x * 0.72} y2={label.y + label.offset.y * 0.72} />
+              <text x={label.x + label.offset.x} y={label.y + label.offset.y} textAnchor={label.offset.anchor}>{label.name}</text>
+            </g>
+          ))}
         </g>
       </svg>
       {points.length === 0 && <div className="map-empty">等待带地点的证据</div>}

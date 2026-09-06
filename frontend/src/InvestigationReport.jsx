@@ -16,22 +16,13 @@ export default function InvestigationReport({ report, audience, loading, onAudie
       {loading && <p className="report-loading">正在整理证据、判断与策展节点…</p>}
       {report && !loading && (
         <div className="report-body">
-          <div className="report-meta"><b>{report.subtitle}</b><span>{report.overview}</span></div>
-          {report.sections.map((section) => (
-            <section key={section.heading} className="report-section">
-              <h3>{section.heading}</h3>
-              {section.paragraphs.map((paragraph, index) => <p key={`${section.heading}:p:${index}`}>{paragraph}</p>)}
-              {section.items.length > 0 && <div className="report-findings">{section.items.map((item, index) => (
-                <article key={`${section.heading}:i:${index}`}>
-                  <b>{item.title}</b>
-                  <p>{item.text}</p>
-                </article>
-              ))}</div>}
-            </section>
-          ))}
+          <div className="report-meta"><span>{report.overview}</span></div>
+          <article className={`report-essay ${audience === "public" ? "public" : "professional"}`}>
+            {(report.narrative || []).map((paragraph, index) => <p key={`report:p:${index}`}>{paragraph}</p>)}
+          </article>
           {report.sources.length > 0 && (
-            <section className="report-section report-sources">
-              <h3>{audience === "professional" ? "来源目录" : "继续了解"}</h3>
+            <details className="report-sources">
+              <summary>{audience === "professional" ? "展开资料来源" : "延伸阅读"}<span>{report.sources.length}</span></summary>
               <div>{report.sources.map((source, index) => (
                 <a key={`${source.source_id}:${index}`} href={source.url} target="_blank" rel="noreferrer">
                   <span>{String(index + 1).padStart(2, "0")}</span>
@@ -39,7 +30,7 @@ export default function InvestigationReport({ report, audience, loading, onAudie
                   <small>{source.source_label}{source.publication_year ? ` · ${source.publication_year}` : ""}</small>
                 </a>
               ))}</div>
-            </section>
+            </details>
           )}
         </div>
       )}

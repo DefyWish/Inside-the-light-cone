@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import App, { apiErrorMessage, buildInvestigationLog, buildStoryline, InvestigationHistory, isVisualCurationCandidate, projectCurationEvents } from "./App.jsx";
-import CurationMap, { hasPoint } from "./CurationMap.jsx";
+import CurationMap, { buildMapLabels, hasPoint } from "./CurationMap.jsx";
 import InvestigationReport from "./InvestigationReport.jsx";
 import Timeline from "./Timeline.jsx";
 import { formatHistoricalYear, historicalYearFor } from "./TreeCanvas.jsx";
@@ -13,7 +13,8 @@ describe("history curation application shell", () => {
     const html = renderToStaticMarkup(<App />);
 
     expect(html).toContain("光锥之内");
-    expect(html).toContain("历史策展 Agent");
+    expect(html).toContain("brand-mark");
+    expect(html).not.toContain("历史策展 Agent");
     expect(html).toContain("检索历史");
     expect(html).toContain("china-standard-outline.svg");
     expect(html).toContain("生命树");
@@ -59,6 +60,35 @@ describe("history curation application shell", () => {
     expect(html).not.toContain("湖州／黄州");
   });
 
+  it("keeps labels for every reached map point while the timeline advances", () => {
+    const events = [
+      { event_id: "meishan", title: "出生", event_year_start: 1037, historical_place: "眉州", latitude: 30.05, longitude: 103.84 },
+      { event_id: "huangzhou", title: "谪居", event_year_start: 1080, historical_place: "黄州", latitude: 30.45, longitude: 114.87 },
+      { event_id: "huizhou", title: "再贬", event_year_start: 1094, historical_place: "惠州", latitude: 23.11, longitude: 114.42 },
+    ];
+    const html = renderToStaticMarkup(<CurationMap events={events} cursorYear={1080} selectedId="huangzhou" onSelect={() => {}} />);
+    const labels = buildMapLabels(events.slice(0, 2), [], "huangzhou");
+
+    expect(labels.map((label) => label.name)).toEqual(expect.arrayContaining(["眉州", "黄州"]));
+    expect(html).toContain(">眉州</text>");
+    expect(html).toContain(">黄州</text>");
+    expect(html).not.toContain(">惠州</text>");
+  });
+
+  it("uses the coordinate-bound end of a compound place label", () => {
+    const html = renderToStaticMarkup(<CurationMap events={[{
+      event_id: "compound-place",
+      title: "迁徙节点",
+      event_year_start: 1200,
+      historical_place: "Tingzhou, Fujian; Jiayingzhou, Guangdong",
+      latitude: 24.3,
+      longitude: 116.1,
+    }]} cursorYear={1200} selectedId="compound-place" onSelect={() => {}} />);
+
+    expect(html).toContain(">嘉应州</text>");
+    expect(html).not.toContain("Jiayingzhou");
+  });
+
   it("keeps deep-time background and negative evidence out of visual chronology", () => {
     const background = {
       claim: "华南古基因组提供深时区域背景而非直接证据，没有任何古个体被直接标识为客家人。",
@@ -80,11 +110,13 @@ describe("history curation application shell", () => {
   });
 
   it("renders professional and public report switches", () => {
-    const report = { title: "客家调查报告", subtitle: "专业历史文博版", overview: "摘要", sections: [], sources: [] };
+    const report = { title: "客家调查报告", subtitle: "专业历史文博版", overview: "摘要", narrative: ["这是一篇完整的综合论述。"], sources: [] };
     const html = renderToStaticMarkup(<InvestigationReport report={report} audience="professional" loading={false} onAudienceChange={() => {}} />);
     expect(html).toContain("专业版");
     expect(html).toContain("科普版");
     expect(html).toContain("客家调查报告");
+    expect(html).toContain("这是一篇完整的综合论述");
+    expect(html).not.toContain("report-findings");
   });
 
   it("renders an independent delete control for every history entry", () => {

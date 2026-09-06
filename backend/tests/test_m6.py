@@ -229,7 +229,7 @@ class ProviderAdapterTest(unittest.IsolatedAsyncioTestCase):
                     {
                         "function": {
                             "name": "finish_investigation",
-                            "arguments": '{"text":"最终故事"}',
+                            "arguments": '{"text":"专业综合论述","public_text":"展厅故事"}',
                         }
                     }
                 ]
@@ -237,7 +237,10 @@ class ProviderAdapterTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(narration, AgentAction(type="narration", text="阶段叙述"))
-        self.assertEqual(finished, AgentAction(type="finish", text="最终故事"))
+        self.assertEqual(
+            finished,
+            AgentAction(type="finish", text="专业综合论述", public_text="展厅故事"),
+        )
 
     async def test_kimi_k3_uses_high_reasoning_and_longer_timeout(self) -> None:
         ChatHandler.response_payload = {
